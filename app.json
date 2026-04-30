@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "TreasureMap",
+    "slug": "treasure-map-proto",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.proto.treasuremap"
+    },
+    "android": {
+      "package": "com.proto.treasuremap"
+    },
+    "plugins": [
+      "expo-notifications"
+    ]
+  }
+}
