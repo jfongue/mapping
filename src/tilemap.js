@@ -95,9 +95,10 @@ function buildDemoMap() {
 
   for (let y = 0; y < MAP_H; y++) {
     for (let x = 0; x < MAP_W; x++) {
-      const dx = (x - cx) / maxR;
-      const dy = (y - cy) / maxR;
-      const d = Math.sqrt(dx * dx + dy * dy);
+      // FIX: renamed from dx/dy → ndx/ndy to avoid TDZ conflict with spawn-patch loop below
+      const ndx = (x - cx) / maxR;
+      const ndy = (y - cy) / maxR;
+      const d = Math.sqrt(ndx * ndx + ndy * ndy);
       const ne = noiseElev[y * MAP_W + x];
       const nb = noiseBiome[y * MAP_W + x];
       const elevation = 1 - d + (ne - 0.5) * 0.5;
@@ -120,9 +121,9 @@ function buildDemoMap() {
     for (let y = 0; y < MAP_H; y++) {
       for (let x = 0; x < MAP_W; x++) {
         const counts = {};
-        for (let dy = -1; dy <= 1; dy++) {
-          for (let dx = -1; dx <= 1; dx++) {
-            const nx = x + dx, ny = y + dy;
+        for (let oy = -1; oy <= 1; oy++) {
+          for (let ox = -1; ox <= 1; ox++) {
+            const nx = x + ox, ny = y + oy;
             if (nx < 0 || ny < 0 || nx >= MAP_W || ny >= MAP_H) continue;
             const tt = tiles[ny * MAP_W + nx];
             counts[tt] = (counts[tt] || 0) + 1;
@@ -141,9 +142,9 @@ function buildDemoMap() {
   // Spawn central garanti
   const sx = Math.floor(MAP_W / 2);
   const sy = Math.floor(MAP_H / 2);
-  for (let dy = -2; dy <= 2; dy++) {
-    for (let dx = -2; dx <= 2; dx++) {
-      tiles[(sy + dy) * MAP_W + (sx + dx)] = TILES.PLAIN;
+  for (let oy = -2; oy <= 2; oy++) {
+    for (let ox = -2; ox <= 2; ox++) {
+      tiles[(sy + oy) * MAP_W + (sx + ox)] = TILES.PLAIN;
     }
   }
 
