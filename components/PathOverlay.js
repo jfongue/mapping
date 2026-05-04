@@ -1,5 +1,5 @@
 // Affiche une courbe (polyline lissée) sur la map, en SVG.
-// Mode "preview" (jaune pointillé) ou "active" (jaune plein).
+// Mode "preview" (pointillé) ou "active" (plein).
 import React, { useMemo } from 'react';
 import Svg, { Polyline } from 'react-native-svg';
 import { MAP_W_PX, MAP_H_PX } from './TileLayer';
