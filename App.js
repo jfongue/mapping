@@ -54,20 +54,31 @@ const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 const INIT_X = SCREEN_W / 2 - MAP_SIZE / 2;
 const INIT_Y = SCREEN_H / 2 - MAP_SIZE / 2;
 
+// Seuil en pixels en-dessous duquel on ne considère pas que l'user a pané
+const PAN_THRESHOLD_PX = 5;
+
 export default function App() {
   // ===== Viewport =====
   const [viewport, setViewport] = useState({ w: SCREEN_W, h: SCREEN_H });
-  const [centered, setCentered] = useState(false);
 
   // ===== Pan caméra (offset pattern : pas de flicker à la fin du geste) =====
   const tx = useRef(new Animated.Value(INIT_X)).current;
   const ty = useRef(new Animated.Value(INIT_Y)).current;
   const lastOffset = useRef({ x: INIT_X, y: INIT_Y });
 
-  // ===== Zoom (un seul Animated.Value, JS-driven) =====
+  // ===== Zoom =====
   const scale = useRef(new Animated.Value(1)).current;
   const lastScale = useRef(1);
   const pinchStartScale = useRef(1);
+
+  // ===== Recenter — nouvelle logique =====
+  // userHasPanned : vrai uniquement si l'utilisateur a déplacé la caméra d'au moins PAN_THRESHOLD_PX.
+  // On utilise un ref (pas un state) pour ne pas déclencher de re-render dans le handler de geste.
+  // showRecenterBtn est un state dérivé exposé au rendu.
+  const userHasPanned = useRef(false);
+  const [showRecenterBtn, setShowRecenterBtn] = useState(false);
+  const followRafId = useRef(null);
+  const isInitialCenter = useRef(false); // true une fois le centrage initial fait
 
   // ===== Perso =====
   const [pos, setPos] = useState(SPAWN);
@@ -110,15 +121,13 @@ export default function App() {
   const [readingLetter, setReadingLetter] = useState(null);
 
   // ===== Path en cours =====
-  // activePathRef : source de vérité pour l'animation (pas de re-render)
-  // frozenActivePath : figé au moment du confirmMove, NE CHANGE PAS pendant le trajet
   const activePathRef = useRef(null);
   const [frozenActivePath, setFrozenActivePath] = useState(null);
 
-  // ===== Tick global online check (ref — pas de re-render) =====
+  // ===== Tick global online check =====
   const globalNowRef = useRef(Date.now());
 
-  // ===== Animated values pour les gestes (manquantes) =====
+  // ===== Animated values pour les gestes =====
   const dx = useRef(new Animated.Value(0)).current;
   const dy = useRef(new Animated.Value(0)).current;
   const pinchScale = useRef(new Animated.Value(1)).current;
@@ -128,6 +137,71 @@ export default function App() {
   const totalX = Animated.add(tx, dx);
   const totalY = Animated.add(ty, dy);
   const totalScale = Animated.multiply(baseScale, pinchScale);
+
+  // === HELPERS RECENTER ===
+
+  /**
+   * Calcule les valeurs tx/ty nécessaires pour centrer le perso à l'écran.
+   * Tient compte du scale courant et du transform-origin RN (centre du View map).
+   */
+  const computeCenteredOffset = (charX, charY, vw, vh, s) => {
+    const cx = MAP_W_PX / 2;
+    const cy = MAP_H_PX / 2;
+    return {
+      x: vw / 2 - s * charX - cx * (1 - s),
+      y: vh / 2 - s * charY - cy * (1 - s),
+    };
+  };
+
+  /**
+   * Marque l'utilisateur comme ayant pané et affiche le bouton recenter.
+   * Appelé uniquement si le déplacement dépasse PAN_THRESHOLD_PX.
+   */
+  const markUserHasPanned = () => {
+    if (userHasPanned.current) return;
+    userHasPanned.current = true;
+    setShowRecenterBtn(true);
+    stopFollowLoop();
+  };
+
+  // === FOLLOW LOOP ===
+  // Quand l'utilisateur n'a pas pané, la caméra suit le perso en mouvement
+  // via requestAnimationFrame (JS-driven, pas de useNativeDriver ici).
+
+  const stopFollowLoop = () => {
+    if (followRafId.current) {
+      cancelAnimationFrame(followRafId.current);
+      followRafId.current = null;
+    }
+  };
+
+  const startFollowLoop = () => {
+    stopFollowLoop();
+    const loop = () => {
+      if (userHasPanned.current) return;
+      const vw = viewport.w || SCREEN_W;
+      const vh = viewport.h || SCREEN_H;
+      const s = lastScale.current;
+      const charX = animX.__getValue();
+      const charY = animY.__getValue();
+      const { x: newX, y: newY } = computeCenteredOffset(charX, charY, vw, vh, s);
+      tx.setValue(newX);
+      ty.setValue(newY);
+      lastOffset.current = { x: newX, y: newY };
+      followRafId.current = requestAnimationFrame(loop);
+    };
+    followRafId.current = requestAnimationFrame(loop);
+  };
+
+  // Démarre/arrête le follow loop selon moving et userHasPanned
+  useEffect(() => {
+    if (moving && !userHasPanned.current) {
+      startFollowLoop();
+    } else {
+      stopFollowLoop();
+    }
+    return stopFollowLoop;
+  }, [moving]);
 
   // === EFFECTS ===
 
@@ -242,7 +316,6 @@ export default function App() {
         entry.anim = null;
       }
     }
-    // Cleanup joueurs partis
     for (const id of Array.from(playerAnims.keys())) {
       if (!seen.has(id)) {
         const e = playerAnims.get(id);
@@ -258,7 +331,7 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // Tick global online (met à jour le ref sans re-render)
+  // Tick global online
   useEffect(() => {
     const id = setInterval(() => { globalNowRef.current = Date.now(); }, 5000);
     return () => clearInterval(id);
@@ -280,7 +353,7 @@ export default function App() {
     return () => loop.stop();
   }, [moving]);
 
-  // Pointillés animés (loop continue)
+  // Pointillés animés
   useEffect(() => {
     let cancelled = false;
     const tick = () => {
@@ -307,22 +380,22 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
-  // Centrage initial sur le perso
+  // Centrage initial sur le perso (une seule fois, après chargement)
   useEffect(() => {
-    if (centered || !loaded || viewport.w === 0) return;
+    if (isInitialCenter.current || !loaded || viewport.w === 0) return;
     const s = lastScale.current;
-    const cx = MAP_W_PX / 2;
-    const cy = MAP_H_PX / 2;
-    const newX = viewport.w / 2 - s * animX.__getValue() - cx * (1 - s);
-    const newY = viewport.h / 2 - s * animY.__getValue() - cy * (1 - s);
+    const vw = viewport.w;
+    const vh = viewport.h;
+    const charX = animX.__getValue();
+    const charY = animY.__getValue();
+    const { x: newX, y: newY } = computeCenteredOffset(charX, charY, vw, vh, s);
     tx.setValue(newX);
     ty.setValue(newY);
     lastOffset.current = { x: newX, y: newY };
-    setCentered(true);
-  }, [loaded, viewport.w, viewport.h, centered]);
+    isInitialCenter.current = true;
+  }, [loaded, viewport.w, viewport.h]);
 
-  // Speed change pendant déplacement → relance avec nouvelle durée
-  // activePathRef est lu directement : pas de re-render, pas de redraw du path
+  // Speed change pendant déplacement
   useEffect(() => {
     if (!moving || !moveTarget.current) return;
     const samples = activePathRef.current;
@@ -340,7 +413,6 @@ export default function App() {
     const wps = cellPath.map((c) => ({ x: c.x * TILE_PX + TILE_PX / 2, y: c.y * TILE_PX + TILE_PX / 2 }));
     wps[0] = { x: cx, y: cy };
     const { samples: newSamples, length } = smoothPath(wps);
-    // Met à jour le ref uniquement — pas de setFrozenActivePath ici
     activePathRef.current = newSamples;
     startMoveAlongCurve(newSamples, length);
   }, [speedMul]);
@@ -356,14 +428,22 @@ export default function App() {
     [{ nativeEvent: { translationX: dx, translationY: dy } }],
     { useNativeDriver: true }
   );
+
   const onPanStateChange = (e) => {
-    if (e.nativeEvent.state === State.BEGAN) {
-      setCentered(false);
+    const { state, translationX, translationY } = e.nativeEvent;
+
+    // Détecte si le user a vraiment pané (dépassement du seuil)
+    if (state === State.ACTIVE || state === State.END || state === State.CANCELLED) {
+      const dist = Math.sqrt(translationX * translationX + translationY * translationY);
+      if (dist >= PAN_THRESHOLD_PX) {
+        markUserHasPanned();
+      }
     }
-    if (e.nativeEvent.state === State.END || e.nativeEvent.state === State.CANCELLED) {
+
+    if (state === State.END || state === State.CANCELLED) {
       lastOffset.current = {
-        x: lastOffset.current.x + e.nativeEvent.translationX,
-        y: lastOffset.current.y + e.nativeEvent.translationY,
+        x: lastOffset.current.x + translationX,
+        y: lastOffset.current.y + translationY,
       };
       tx.setValue(lastOffset.current.x);
       ty.setValue(lastOffset.current.y);
@@ -376,11 +456,14 @@ export default function App() {
     [{ nativeEvent: { scale: pinchScale } }],
     { useNativeDriver: true }
   );
+
   const onPinchStateChange = (e) => {
-    if (e.nativeEvent.state === State.BEGAN) {
-      setCentered(false);
+    const { state } = e.nativeEvent;
+    // Le pinch déplace aussi la caméra visuellement
+    if (state === State.BEGAN) {
+      markUserHasPanned();
     }
-    if (e.nativeEvent.state === State.END || e.nativeEvent.state === State.CANCELLED) {
+    if (state === State.END || state === State.CANCELLED) {
       let next = lastScale.current * e.nativeEvent.scale;
       next = Math.max(MIN_SCALE, Math.min(MAX_SCALE, next));
       lastScale.current = next;
@@ -494,7 +577,6 @@ export default function App() {
     if (!pendingTarget) return;
     const samples = pendingTarget.samples;
     const length = pendingTarget.length;
-    // Fige le path une seule fois — ne sera plus jamais mis à jour jusqu'à la fin du trajet
     activePathRef.current = samples;
     setFrozenActivePath(samples);
     setPendingTarget(null);
@@ -556,7 +638,6 @@ export default function App() {
     setMoving(false);
     setEta(null);
     setTarget(null);
-    // Efface le path figé à l'arrivée
     activePathRef.current = null;
     setFrozenActivePath(null);
     currentAnim.current = null;
@@ -598,26 +679,41 @@ export default function App() {
     });
   };
 
+  /**
+   * Recentre la caméra sur le personnage avec une animation fluide.
+   * Lit la position caméra réelle (lastOffset + delta geste en cours) pour
+   * éviter tout saut visuel si l'user a le doigt posé pendant le tap.
+   */
   const recenter = () => {
+    const vw = viewport.w || SCREEN_W;
+    const vh = viewport.h || SCREEN_H;
+    const s = lastScale.current;
+    const charX = animX.__getValue();
+    const charY = animY.__getValue();
+
+    // Position caméra actuelle (stable + delta live)
+    const curOffX = lastOffset.current.x + dx.__getValue();
+    const curOffY = lastOffset.current.y + dy.__getValue();
+
+    const { x: targetX, y: targetY } = computeCenteredOffset(charX, charY, vw, vh, s);
+
+    // Commit le delta live dans lastOffset avant d'animer
+    lastOffset.current = { x: curOffX, y: curOffY };
     dx.setValue(0);
     dy.setValue(0);
-    pinchScale.setValue(1);
-    const s = lastScale.current;
-    const curX = moving ? animX.__getValue() : pos.x;
-    const curY = moving ? animY.__getValue() : pos.y;
-    // RN transform-origin = centre du View (MAP_W_PX/2, MAP_H_PX/2).
-    // Pour amener (curX, curY) au centre du viewport :
-    // viewport/2 = s*cur + (1-s)*center + translate
-    const cx = MAP_W_PX / 2;
-    const cy = MAP_H_PX / 2;
-    const newX = viewport.w / 2 - s * curX - cx * (1 - s);
-    const newY = viewport.h / 2 - s * curY - cy * (1 - s);
+    tx.setValue(curOffX);
+    ty.setValue(curOffY);
+
     Animated.parallel([
-      Animated.timing(tx, { toValue: newX, duration: 350, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-      Animated.timing(ty, { toValue: newY, duration: 350, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(tx, { toValue: targetX, duration: 350, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(ty, { toValue: targetY, duration: 350, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
     ]).start(() => {
-      lastOffset.current = { x: newX, y: newY };
-      setCentered(true);
+      lastOffset.current = { x: targetX, y: targetY };
+      // Repasse en mode "suivi" : efface le flag pané
+      userHasPanned.current = false;
+      setShowRecenterBtn(false);
+      // Si le perso est encore en mouvement, démarre le follow loop
+      if (moving) startFollowLoop();
     });
   };
 
@@ -671,8 +767,6 @@ export default function App() {
     return { dist: Math.round(length), durSec: Math.round(durMs / 1000) };
   })() : null;
 
-  // === HUD timer — géré dans TravelingBar directement ===
-
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <StatusBar style="light" />
@@ -698,7 +792,7 @@ export default function App() {
                         />
                       )}
 
-                      {/* Chemin actif figé — référence stable, ne re-render jamais pendant le trajet */}
+                      {/* Chemin actif figé */}
                       {frozenActivePath && (
                         <PathOverlay samples={frozenActivePath} color="#3a7ea8" dashed={false} opacity={0.7} />
                       )}
@@ -810,7 +904,7 @@ export default function App() {
                         );
                       })}
 
-                      {/* Perso (SVG aventurier fantasy) */}
+                      {/* Perso */}
                       <Animated.View style={{
                         position: 'absolute',
                         width: 60, height: 60,
@@ -843,9 +937,9 @@ export default function App() {
           <TravelingBar eta={eta} onStop={null} />
         )}
 
-        {/* Bouton recenter — masqué si déjà centré */}
-        {!centered && (
-          <TouchableOpacity style={styles.recenterBtn} onPress={recenter} activeOpacity={0.85}>
+        {/* Bouton recenter — visible uniquement si l'utilisateur a réellement pané */}
+        {showRecenterBtn && (
+          <TouchableOpacity style={styles.recenterBtn} onPress={recenter} activeOpacity={0.75}>
             <Text style={styles.iconText}>⊕</Text>
           </TouchableOpacity>
         )}
@@ -1017,9 +1111,9 @@ const styles = StyleSheet.create({
 
   recenterBtn: {
     position: 'absolute',
-    bottom: 170, // au-dessus du parchemin (parchemin à bottom: 50)
+    bottom: 170,
     left: '50%',
-    marginLeft: -22, // demi-largeur (44/2) pour centrer
+    marginLeft: -22,
     width: 44, height: 44, borderRadius: 22,
     backgroundColor: 'rgba(255,251,232,0.96)',
     borderWidth: 1.5, borderColor: '#3a2614',
