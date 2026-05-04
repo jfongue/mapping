@@ -118,6 +118,17 @@ export default function App() {
   // ===== Tick global online check (ref — pas de re-render) =====
   const globalNowRef = useRef(Date.now());
 
+  // ===== Animated values pour les gestes (manquantes) =====
+  const dx = useRef(new Animated.Value(0)).current;
+  const dy = useRef(new Animated.Value(0)).current;
+  const pinchScale = useRef(new Animated.Value(1)).current;
+  const baseScale = useRef(new Animated.Value(1)).current;
+
+  // Transforms composés
+  const totalX = Animated.add(tx, dx);
+  const totalY = Animated.add(ty, dy);
+  const totalScale = Animated.multiply(baseScale, pinchScale);
+
   // === EFFECTS ===
 
   // Charge save pos
