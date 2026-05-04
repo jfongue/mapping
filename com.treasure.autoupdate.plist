@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.treasure.autoupdate</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/jeremyfongue/Documents/Claude/Projects/Mapping/auto-update.sh</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/jeremyfongue/Documents/Claude/Projects/Mapping/.auto-update.stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/jeremyfongue/Documents/Claude/Projects/Mapping/.auto-update.stderr.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>EXPO_TOKEN</key>
+    <string>COLLE_TON_EXPO_TOKEN_ICI</string>
+  </dict>
+</dict>
+</plist>

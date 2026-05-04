@@ -20,12 +20,21 @@ import {
 } from './firebase';
 
 import {
-  MAP_SIZE, GRID_STEP,
   MIN_SCALE, MAX_SCALE,
   ONLINE_THRESHOLD_MS, TAP_PLAYER_RADIUS, SPEED_LEVELS,
-  TOP_SAFE, SPAWN, SAVE_KEY, PROFILE_KEY,
+  TOP_SAFE, SAVE_KEY, PROFILE_KEY,
   PLAYER_COLORS,
 } from './src/constants';
+import { TILES_DATA, MAP_W, MAP_H, TILE_PX, findPath } from './src/tilemap';
+import { smoothPath, sampleAt } from './src/smoothing';
+import TileLayer, { MAP_W_PX, MAP_H_PX } from './components/TileLayer';
+import PathOverlay from './components/PathOverlay';
+
+const MAP_SIZE = MAP_W_PX;
+const SPAWN = { x: (MAP_W / 2) * TILE_PX, y: (MAP_H / 2) * TILE_PX };
+const SPEED_PX_PER_SEC = 80;
+const MIN_DURATION_FALLBACK = 5000;
+const MAX_DURATION_FALLBACK = 60000;
 import { formatMeters, formatDuration } from './src/format';
 import { movementDuration, lerpFromTarget, remainingDurationAt } from './src/movement';
 import { generateProfile, isPlayerOnline } from './src/profile';
@@ -37,6 +46,8 @@ import SettingsModal from './components/SettingsModal';
 import PlayerDetailModal from './components/PlayerDetailModal';
 import LetterWriteModal from './components/LetterWriteModal';
 import LetterReadModal from './components/LetterReadModal';
+import { ConfirmationBar, TravelingBar } from './components/TravelBars';
+import { AdventurerSprite } from './components/Adventurer';
 import { ScrollText } from 'lucide-react-native';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
@@ -48,27 +59,21 @@ export default function App() {
   const [viewport, setViewport] = useState({ w: SCREEN_W, h: SCREEN_H });
   const [centered, setCentered] = useState(false);
 
-  // ===== Pan caméra =====
+  // ===== Pan caméra (offset pattern : pas de flicker à la fin du geste) =====
   const tx = useRef(new Animated.Value(INIT_X)).current;
   const ty = useRef(new Animated.Value(INIT_Y)).current;
-  const dx = useRef(new Animated.Value(0)).current;
-  const dy = useRef(new Animated.Value(0)).current;
   const lastOffset = useRef({ x: INIT_X, y: INIT_Y });
-  const totalX = Animated.add(tx, dx);
-  const totalY = Animated.add(ty, dy);
 
-  // ===== Zoom =====
-  const baseScale = useRef(new Animated.Value(1)).current;
-  const pinchScale = useRef(new Animated.Value(1)).current;
+  // ===== Zoom (un seul Animated.Value, JS-driven) =====
+  const scale = useRef(new Animated.Value(1)).current;
   const lastScale = useRef(1);
-  const totalScale = Animated.multiply(baseScale, pinchScale);
+  const pinchStartScale = useRef(1);
 
   // ===== Perso =====
   const [pos, setPos] = useState(SPAWN);
   const [moving, setMoving] = useState(false);
   const [target, setTarget] = useState(null);
   const [eta, setEta] = useState(null);
-  const [now, setNow] = useState(Date.now());
   const [loaded, setLoaded] = useState(false);
   const animX = useRef(new Animated.Value(SPAWN.x)).current;
   const animY = useRef(new Animated.Value(SPAWN.y)).current;
@@ -104,8 +109,14 @@ export default function App() {
   const [letterDraft, setLetterDraft] = useState('');
   const [readingLetter, setReadingLetter] = useState(null);
 
-  // ===== Tick global online check =====
-  const [globalNow, setGlobalNow] = useState(Date.now());
+  // ===== Path en cours =====
+  // activePathRef : source de vérité pour l'animation (pas de re-render)
+  // frozenActivePath : figé au moment du confirmMove, NE CHANGE PAS pendant le trajet
+  const activePathRef = useRef(null);
+  const [frozenActivePath, setFrozenActivePath] = useState(null);
+
+  // ===== Tick global online check (ref — pas de re-render) =====
+  const globalNowRef = useRef(Date.now());
 
   // === EFFECTS ===
 
@@ -159,6 +170,8 @@ export default function App() {
       try {
         await joinMultiplayer({
           playerId: profile.id, name: profile.name, color: profile.color,
+          outfit: profile.outfit, skin: profile.skin,
+          hair: profile.hair, hat: profile.hat,
           x: animX.__getValue(), y: animY.__getValue(),
         });
         if (!alive) return;
@@ -234,16 +247,9 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // Tick pour HUD timer
+  // Tick global online (met à jour le ref sans re-render)
   useEffect(() => {
-    if (!moving) return;
-    const id = setInterval(() => setNow(Date.now()), 250);
-    return () => clearInterval(id);
-  }, [moving]);
-
-  // Tick global online
-  useEffect(() => {
-    const id = setInterval(() => setGlobalNow(Date.now()), 5000);
+    const id = setInterval(() => { globalNowRef.current = Date.now(); }, 5000);
     return () => clearInterval(id);
   }, []);
 
@@ -294,8 +300,10 @@ export default function App() {
   useEffect(() => {
     if (centered || !loaded || viewport.w === 0) return;
     const s = lastScale.current;
-    const newX = viewport.w / (2 * s) - animX.__getValue();
-    const newY = viewport.h / (2 * s) - animY.__getValue();
+    const cx = MAP_W_PX / 2;
+    const cy = MAP_H_PX / 2;
+    const newX = viewport.w / 2 - s * animX.__getValue() - cx * (1 - s);
+    const newY = viewport.h / 2 - s * animY.__getValue() - cy * (1 - s);
     tx.setValue(newX);
     ty.setValue(newY);
     lastOffset.current = { x: newX, y: newY };
@@ -303,16 +311,27 @@ export default function App() {
   }, [loaded, viewport.w, viewport.h, centered]);
 
   // Speed change pendant déplacement → relance avec nouvelle durée
+  // activePathRef est lu directement : pas de re-render, pas de redraw du path
   useEffect(() => {
     if (!moving || !moveTarget.current) return;
+    const samples = activePathRef.current;
+    if (!samples || samples.length < 2) return;
     if (currentAnim.current) currentAnim.current.stop();
-    const target = moveTarget.current;
-    const fakeTarget = {
-      toX: target.x, toY: target.y,
-      durationMs: moveBaseDuration.current,
-    };
-    const remaining = remainingDurationAt(fakeTarget, animX.__getValue(), animY.__getValue(), speedMul);
-    runMoveAnim(remaining);
+    const cx = animX.__getValue();
+    const cy = animY.__getValue();
+    const sx = Math.floor(cx / TILE_PX);
+    const sy = Math.floor(cy / TILE_PX);
+    const last = samples[samples.length - 1];
+    const fx = Math.floor(last.x / TILE_PX);
+    const fy = Math.floor(last.y / TILE_PX);
+    const cellPath = findPath(TILES_DATA, MAP_W, MAP_H, sx, sy, fx, fy);
+    if (!cellPath) return;
+    const wps = cellPath.map((c) => ({ x: c.x * TILE_PX + TILE_PX / 2, y: c.y * TILE_PX + TILE_PX / 2 }));
+    wps[0] = { x: cx, y: cy };
+    const { samples: newSamples, length } = smoothPath(wps);
+    // Met à jour le ref uniquement — pas de setFrozenActivePath ici
+    activePathRef.current = newSamples;
+    startMoveAlongCurve(newSamples, length);
   }, [speedMul]);
 
   // Cleanup speedTimer au unmount
@@ -327,6 +346,9 @@ export default function App() {
     { useNativeDriver: true }
   );
   const onPanStateChange = (e) => {
+    if (e.nativeEvent.state === State.BEGAN) {
+      setCentered(false);
+    }
     if (e.nativeEvent.state === State.END || e.nativeEvent.state === State.CANCELLED) {
       lastOffset.current = {
         x: lastOffset.current.x + e.nativeEvent.translationX,
@@ -344,6 +366,9 @@ export default function App() {
     { useNativeDriver: true }
   );
   const onPinchStateChange = (e) => {
+    if (e.nativeEvent.state === State.BEGAN) {
+      setCentered(false);
+    }
     if (e.nativeEvent.state === State.END || e.nativeEvent.state === State.CANCELLED) {
       let next = lastScale.current * e.nativeEvent.scale;
       next = Math.max(MIN_SCALE, Math.min(MAX_SCALE, next));
@@ -360,7 +385,7 @@ export default function App() {
 
   // === HELPERS ===
 
-  const isOnline = (p) => isPlayerOnline(p, globalNow, ONLINE_THRESHOLD_MS);
+  const isOnline = (p) => isPlayerOnline(p, globalNowRef.current, ONLINE_THRESHOLD_MS);
 
   const computePlayerPos = (p) => {
     const e = playerAnims.get(p.id);
@@ -378,14 +403,12 @@ export default function App() {
     return best;
   };
 
-  // Détecte tap sur une lettre (uniquement celles des autres ET si on est proche)
-  const LETTER_TAP_RADIUS = 30;       // tap doit être proche de la lettre
-  const LETTER_READ_DISTANCE = 80;    // perso doit être à <80px pour lire
+  const LETTER_TAP_RADIUS = 30;
+  const LETTER_READ_DISTANCE = 80;
   const findTappedLetter = (tap) => {
     let best = null, bestD = LETTER_TAP_RADIUS;
     for (const l of letters) {
       if (!profile || l.authorId === profile.id) continue;
-      // Doit être proche de mon perso
       const distToMe = Math.hypot(l.x - pos.x, l.y - pos.y);
       if (distToMe > LETTER_READ_DISTANCE) continue;
       const d = Math.hypot(l.x - tap.x, l.y - tap.y);
@@ -398,24 +421,30 @@ export default function App() {
 
   const handleTap = (evt) => {
     const t = { x: evt.nativeEvent.locationX, y: evt.nativeEvent.locationY };
-    // Tap sur lettre (autres) → ouvre lecture
     const tappedLetter = findTappedLetter(t);
-    if (tappedLetter) {
-      setReadingLetter(tappedLetter);
-      return;
-    }
+    if (tappedLetter) { setReadingLetter(tappedLetter); return; }
     const tappedPlayer = findTappedPlayer(t);
-    if (tappedPlayer) {
-      setSelectedPlayer(tappedPlayer);
-      return;
-    }
+    if (tappedPlayer) { setSelectedPlayer(tappedPlayer); return; }
     if (moving) return;
     if (pendingTarget) {
       const d = Math.hypot(pendingTarget.x - t.x, pendingTarget.y - t.y);
       if (d > 30) setPendingTarget(null);
       return;
     }
-    setPendingTarget(t);
+    const sx = Math.floor(pos.x / TILE_PX);
+    const sy = Math.floor(pos.y / TILE_PX);
+    const tx = Math.floor(t.x / TILE_PX);
+    const ty = Math.floor(t.y / TILE_PX);
+    const cellPath = findPath(TILES_DATA, MAP_W, MAP_H, sx, sy, tx, ty);
+    if (!cellPath) return;
+    const wps = cellPath.map((c) => ({
+      x: c.x * TILE_PX + TILE_PX / 2,
+      y: c.y * TILE_PX + TILE_PX / 2,
+    }));
+    wps[0] = { x: pos.x, y: pos.y };
+    const { samples, length } = smoothPath(wps);
+    const finalPx = wps[wps.length - 1];
+    setPendingTarget({ ...finalPx, samples, length });
   };
 
   // === Letters handlers ===
@@ -452,16 +481,79 @@ export default function App() {
 
   const confirmMove = () => {
     if (!pendingTarget) return;
-    const t = pendingTarget;
+    const samples = pendingTarget.samples;
+    const length = pendingTarget.length;
+    // Fige le path une seule fois — ne sera plus jamais mis à jour jusqu'à la fin du trajet
+    activePathRef.current = samples;
+    setFrozenActivePath(samples);
     setPendingTarget(null);
-    setTarget(t);
-    startMove(t);
+    setTarget({ x: pendingTarget.x, y: pendingTarget.y });
+    startMoveAlongCurve(samples, length);
   };
 
   const cancelMove = () => setPendingTarget(null);
 
+  const progressRef = useRef(null);
+  const progressListenerId = useRef(null);
+
+  const startMoveAlongCurve = (samples, length) => {
+    if (!samples || samples.length < 2) return;
+    const baseDuration = Math.max(MIN_DURATION_FALLBACK, Math.min(MAX_DURATION_FALLBACK, (length / SPEED_PX_PER_SEC) * 1000));
+    const dur = baseDuration / speedMul;
+    moveTarget.current = samples[samples.length - 1];
+    moveBaseDuration.current = baseDuration;
+    setMoving(true);
+    setEta(Date.now() + dur);
+
+    announceMove({
+      from: { x: pos.x, y: pos.y },
+      to: samples[samples.length - 1],
+      startTs: Date.now(),
+      durationMs: dur,
+    });
+
+    const progress = new Animated.Value(0);
+    progressRef.current = progress;
+    progressListenerId.current = progress.addListener(({ value }) => {
+      const p = sampleAt(samples, value);
+      animX.setValue(p.x);
+      animY.setValue(p.y);
+    });
+
+    const anim = Animated.timing(progress, {
+      toValue: length,
+      duration: dur,
+      easing: Easing.linear,
+      useNativeDriver: false,
+    });
+    currentAnim.current = anim;
+    anim.start(({ finished }) => {
+      if (progressListenerId.current && progressRef.current) {
+        progressRef.current.removeListener(progressListenerId.current);
+        progressListenerId.current = null;
+      }
+      if (!finished) return;
+      finalizeArrival(samples[samples.length - 1]);
+    });
+  };
+
+  const finalizeArrival = (final) => {
+    animX.setValue(final.x);
+    animY.setValue(final.y);
+    setPos({ x: final.x, y: final.y });
+    clearMyMove(final.x, final.y);
+    setMoving(false);
+    setEta(null);
+    setTarget(null);
+    // Efface le path figé à l'arrivée
+    activePathRef.current = null;
+    setFrozenActivePath(null);
+    currentAnim.current = null;
+    moveTarget.current = null;
+  };
+
   const startMove = (t) => {
-    const { baseDurationMs } = movementDuration(pos, t, 1); // base avec speedMul=1
+    const { baseDurationMs } = movementDuration(pos, t, 1);
     moveTarget.current = t;
     moveBaseDuration.current = baseDurationMs;
     setMoving(true);
@@ -502,15 +594,22 @@ export default function App() {
     const s = lastScale.current;
     const curX = moving ? animX.__getValue() : pos.x;
     const curY = moving ? animY.__getValue() : pos.y;
-    const newX = viewport.w / (2 * s) - curX;
-    const newY = viewport.h / (2 * s) - curY;
+    // RN transform-origin = centre du View (MAP_W_PX/2, MAP_H_PX/2).
+    // Pour amener (curX, curY) au centre du viewport :
+    // viewport/2 = s*cur + (1-s)*center + translate
+    const cx = MAP_W_PX / 2;
+    const cy = MAP_H_PX / 2;
+    const newX = viewport.w / 2 - s * curX - cx * (1 - s);
+    const newY = viewport.h / 2 - s * curY - cy * (1 - s);
     Animated.parallel([
       Animated.timing(tx, { toValue: newX, duration: 350, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
       Animated.timing(ty, { toValue: newY, duration: 350, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-    ]).start(() => { lastOffset.current = { x: newX, y: newY }; });
+    ]).start(() => {
+      lastOffset.current = { x: newX, y: newY };
+      setCentered(true);
+    });
   };
 
-  // Speed long-press : monte par paliers
   const onSpeedPressIn = () => {
     setSpeedLvl(1);
     let lvl = 1;
@@ -554,14 +653,14 @@ export default function App() {
 
   // === Stats preview ===
   const previewStats = pendingTarget ? (() => {
-    const { dist, durationMs } = movementDuration(pos, pendingTarget, speedMul);
-    return { dist: Math.round(dist), durSec: Math.round(durationMs / 1000) };
+    const length = pendingTarget.length || 0;
+    let durMs = (length / SPEED_PX_PER_SEC) * 1000;
+    durMs = Math.max(MIN_DURATION_FALLBACK, Math.min(MAX_DURATION_FALLBACK, durMs));
+    durMs = durMs / Math.max(1, speedMul);
+    return { dist: Math.round(length), durSec: Math.round(durMs / 1000) };
   })() : null;
 
-  // === HUD timer ===
-  const remaining = eta ? Math.max(0, Math.ceil((eta - now) / 1000)) : 0;
-  const mm = String(Math.floor(remaining / 60)).padStart(2, '0');
-  const ss = String(remaining % 60).padStart(2, '0');
+  // === HUD timer — géré dans TravelingBar directement ===
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
@@ -572,30 +671,32 @@ export default function App() {
             <PanGestureHandler onGestureEvent={onPanGesture} onHandlerStateChange={onPanStateChange} minPointers={1} maxPointers={1}>
               <Animated.View style={styles.canvas} onLayout={onCanvasLayout}>
                 <Animated.View style={[styles.map, {
-                  width: MAP_SIZE, height: MAP_SIZE,
+                  width: MAP_W_PX, height: MAP_H_PX,
                   transform: [{ translateX: totalX }, { translateY: totalY }, { scale: totalScale }],
                 }]}>
                   <TouchableWithoutFeedback onPress={handleTap}>
                     <View style={StyleSheet.absoluteFill}>
-                      {/* Grille */}
-                      {Array.from({ length: Math.floor(MAP_SIZE / GRID_STEP) + 1 }).map((_, i) => (
-                        <React.Fragment key={`g${i}`}>
-                          <View style={[styles.gridV, { left: i * GRID_STEP }]} />
-                          <View style={[styles.gridH, { top: i * GRID_STEP }]} />
-                        </React.Fragment>
-                      ))}
-                      {/* Coins de repère */}
-                      <View style={[styles.corner, { top: 0, left: 0, backgroundColor: '#ff6b6b' }]} />
-                      <View style={[styles.corner, { top: 0, right: 0, backgroundColor: '#ffd93d' }]} />
-                      <View style={[styles.corner, { bottom: 0, left: 0, backgroundColor: '#3d8acf' }]} />
-                      <View style={[styles.corner, { bottom: 0, right: 0, backgroundColor: '#9b6dbd' }]} />
+                      {/* Tilemap */}
+                      <TileLayer />
 
-                      {/* Lettres déposées (icône lucide ScrollText) */}
+                      {/* Preview : courbe pathfinding (bleu pointillé) */}
+                      {pendingTarget && (
+                        <PathOverlay
+                          samples={pendingTarget.samples}
+                          color="#3a7ea8" dashed opacity={0.95}
+                        />
+                      )}
+
+                      {/* Chemin actif figé — référence stable, ne re-render jamais pendant le trajet */}
+                      {frozenActivePath && (
+                        <PathOverlay samples={frozenActivePath} color="#3a7ea8" dashed={false} opacity={0.7} />
+                      )}
+
+                      {/* Lettres déposées */}
                       {letters.map((l) => {
                         const isMine = profile && l.authorId === profile.id;
                         const distToMe = Math.hypot(l.x - pos.x, l.y - pos.y);
                         const readable = !isMine && distToMe <= 80;
-                        // Couleur : grisée si pas lisible, sinon couleur auteur
                         const iconColor = isMine
                           ? '#666'
                           : (readable ? (l.authorColor || '#8b4513') : '#888');
@@ -656,17 +757,39 @@ export default function App() {
                         }
                         return (
                           <View key={p.id} style={StyleSheet.absoluteFill} pointerEvents="none">
-                            <Animated.View style={[
-                              styles.otherPlayer,
-                              { backgroundColor: p.color || '#888', transform: dotTransform },
-                            ]} />
+                            <Animated.View style={{
+                              position: 'absolute',
+                              width: 50, height: 50,
+                              transform: [
+                                { translateX: Animated.subtract(e.x, 25) },
+                                { translateY: Animated.subtract(e.y, 25) },
+                                ...(isMoving ? [
+                                  { translateY: Animated.multiply(bounce, -6) },
+                                  { scaleX: bounce.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) },
+                                  { scaleY: bounce.interpolate({ inputRange: [0, 1], outputRange: [1, 0.94] }) },
+                                ] : []),
+                                ...(!online && !isMoving ? [
+                                  { scaleX: breathe.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1.04] }) },
+                                  { scaleY: breathe.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1.04] }) },
+                                ] : []),
+                              ],
+                            }}>
+                              <AdventurerSprite
+                                size={50} viewBoxScale={1.2}
+                                dir="down" moving={isMoving}
+                                outfit={p.outfit || 'gray'}
+                                skin={p.skin || 'light'}
+                                hair={p.hair || 'brown'}
+                                hat={p.hat || 'none'}
+                              />
+                            </Animated.View>
                             {!online && <SleepyZzz x={e.x} y={e.y} />}
                             <Animated.Text
                               numberOfLines={1}
                               style={[styles.otherPlayerLabel, {
                                 transform: [
                                   { translateX: Animated.subtract(e.x, 50) },
-                                  { translateY: Animated.add(e.y, 16) },
+                                  { translateY: Animated.add(e.y, 22) },
                                 ],
                               }]}
                             >
@@ -676,16 +799,26 @@ export default function App() {
                         );
                       })}
 
-                      {/* Perso */}
-                      <Animated.View style={[styles.player, {
-                        backgroundColor: profile?.color || '#ff6b6b',
+                      {/* Perso (SVG aventurier fantasy) */}
+                      <Animated.View style={{
+                        position: 'absolute',
+                        width: 60, height: 60,
                         transform: [
-                          { translateX: Animated.subtract(animX, 14) },
-                          { translateY: Animated.subtract(Animated.subtract(animY, 14), Animated.multiply(bounce, 8)) },
-                          { scaleX: bounce.interpolate({ inputRange: [0, 1], outputRange: [1, 1.1] }) },
-                          { scaleY: bounce.interpolate({ inputRange: [0, 1], outputRange: [1, 0.92] }) },
+                          { translateX: Animated.subtract(animX, 30) },
+                          { translateY: Animated.subtract(Animated.subtract(animY, 30), Animated.multiply(bounce, 6)) },
+                          { scaleX: bounce.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) },
+                          { scaleY: bounce.interpolate({ inputRange: [0, 1], outputRange: [1, 0.94] }) },
                         ],
-                      }]} />
+                      }}>
+                        <AdventurerSprite
+                          size={60} viewBoxScale={1.4}
+                          dir="down" moving={moving}
+                          outfit={profile?.outfit || 'red'}
+                          skin={profile?.skin || 'light'}
+                          hair={profile?.hair || 'brown'}
+                          hat={profile?.hat || 'none'}
+                        />
+                      </Animated.View>
                     </View>
                   </TouchableWithoutFeedback>
                 </Animated.View>
@@ -694,19 +827,17 @@ export default function App() {
           </Animated.View>
         </PinchGestureHandler>
 
-        {/* HUD timer pendant déplacement */}
+        {/* TravelingBar pendant déplacement */}
         {moving && (
-          <View style={styles.hud} pointerEvents="none">
-            <Text style={styles.hudText}>
-              En route — {mm}:{ss}{speedMul > 1 ? ` ×${speedMul}` : ''}
-            </Text>
-          </View>
+          <TravelingBar eta={eta} onStop={null} />
         )}
 
-        {/* Bouton recenter */}
-        <TouchableOpacity style={styles.recenterBtn} onPress={recenter}>
-          <Text style={styles.iconText}>⊕</Text>
-        </TouchableOpacity>
+        {/* Bouton recenter — masqué si déjà centré */}
+        {!centered && (
+          <TouchableOpacity style={styles.recenterBtn} onPress={recenter} activeOpacity={0.85}>
+            <Text style={styles.iconText}>⊕</Text>
+          </TouchableOpacity>
+        )}
 
         {/* Bouton speed (debug only) */}
         {debugEnabled && (
@@ -746,29 +877,15 @@ export default function App() {
           </View>
         )}
 
-        {/* Panneau confirmation déplacement */}
+        {/* ConfirmationBar avant déplacement */}
         {pendingTarget && previewStats && (
-          <View style={styles.previewBar}>
-            <View style={styles.previewStats}>
-              <View style={styles.previewStat}>
-                <Text style={styles.previewStatLabel}>Distance</Text>
-                <Text style={styles.previewStatValue}>{formatMeters(previewStats.dist)}</Text>
-              </View>
-              <View style={styles.previewSep} />
-              <View style={styles.previewStat}>
-                <Text style={styles.previewStatLabel}>Durée</Text>
-                <Text style={styles.previewStatValue}>{formatDuration(previewStats.durSec)}</Text>
-              </View>
-            </View>
-            <View style={styles.previewBtns}>
-              <TouchableOpacity style={[styles.previewBtn, styles.previewBtnCancel]} onPress={cancelMove}>
-                <Text style={styles.previewBtnText}>Annuler</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.previewBtn, styles.previewBtnGo]} onPress={confirmMove}>
-                <Text style={[styles.previewBtnText, { color: '#fff' }]}>Partir →</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
+          <ConfirmationBar
+            distancePx={previewStats.dist}
+            durationSec={previewStats.durSec}
+            destLabel={`${Math.round(pendingTarget.x / TILE_PX)}, ${Math.round(pendingTarget.y / TILE_PX)}`}
+            onCancel={cancelMove}
+            onConfirm={confirmMove}
+          />
         )}
 
         {/* Bouton Settings */}
@@ -776,7 +893,7 @@ export default function App() {
           <Text style={styles.settingsIcon}>⚙</Text>
         </TouchableOpacity>
 
-        {/* Bouton Lettre — icône lucide ScrollText */}
+        {/* Bouton Lettre */}
         {!moving && !pendingTarget && (
           <TouchableOpacity style={styles.letterBtn} onPress={openLetterWrite} activeOpacity={0.8}>
             <Animated.View style={[
@@ -798,7 +915,7 @@ export default function App() {
             profile={profile}
             draftName={draftName}
             setDraftName={setDraftName}
-            onColorChange={(c) => saveProfile({ color: c })}
+            onPatch={(patch) => saveProfile(patch)}
             debugEnabled={debugEnabled}
             onToggleDebug={onToggleDebug}
             onClose={() => setSettingsOpen(false)}
@@ -888,12 +1005,18 @@ const styles = StyleSheet.create({
   },
 
   recenterBtn: {
-    position: 'absolute', right: 16, bottom: 110,
-    width: 46, height: 46, borderRadius: 23,
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    position: 'absolute',
+    bottom: 170, // au-dessus du parchemin (parchemin à bottom: 50)
+    left: '50%',
+    marginLeft: -22, // demi-largeur (44/2) pour centrer
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: 'rgba(255,251,232,0.96)',
+    borderWidth: 1.5, borderColor: '#3a2614',
     justifyContent: 'center', alignItems: 'center',
+    shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 }, elevation: 6,
   },
-  iconText: { color: '#fff', fontSize: 22, fontWeight: '700' },
+  iconText: { color: '#3a2614', fontSize: 22, fontWeight: '700' },
 
   speedBtn: {
     position: 'absolute', bottom: 40, right: 16,
@@ -939,6 +1062,12 @@ const styles = StyleSheet.create({
 
   settingsBtn: {
     position: 'absolute', top: TOP_SAFE - 4, right: 16,
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  customizeBtn: {
+    position: 'absolute', top: TOP_SAFE - 4, right: 70,
     width: 44, height: 44, borderRadius: 22,
     backgroundColor: 'rgba(0,0,0,0.7)',
     justifyContent: 'center', alignItems: 'center',
