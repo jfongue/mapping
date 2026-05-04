@@ -13,8 +13,17 @@
     "android": {
       "package": "com.proto.treasuremap"
     },
+    "splash": {
+      "backgroundColor": "#1a1a2e",
+      "resizeMode": "contain"
+    },
     "plugins": [
       "expo-notifications"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "adb81213-682e-45cb-a971-24976671f4a1"
+      }
+    }
   }
 }
