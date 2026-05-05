@@ -1,10 +1,9 @@
 // Service multijoueur Firebase Realtime Database
 // Schéma RTDB :
-//   /players/{playerId} = { id, name, color, x, y, target?: {x,y, startTs, durationMs}, lastSeen }
+//   /players/{playerId} = { id, name, color, x, y, target?: {fromX,fromY,toX,toY,startTs,durationMs}, lastSeen }
 //
-// updatePosition(): écrit la position courante (throttled 250ms)
-// announceMove(target, durationMs): écrit le trajet en cours pour que les autres voient la trajectoire
-// subscribePlayers(cb): callback avec la liste de tous les joueurs sauf moi
+// La Botaniste Rebelle est gérée exclusivement par scripts/botaniste.js (Node).
+// Côté client elle est un joueur ordinaire, lue depuis Firebase comme les autres.
 
 import { initializeApp } from 'firebase/app';
 import {
@@ -30,7 +29,6 @@ let listeners = new Set();
 let unsubAll = null;
 let lastPush = 0;
 let latestPlayers = null;
-let _botInterval = null;
 const PUSH_THROTTLE_MS = 250;
 
 function ensureInit() {
@@ -38,85 +36,6 @@ function ensureInit() {
   app = initializeApp(firebaseConfig);
   db = getDatabase(app);
 }
-
-// ─── La Botaniste Rebelle — injection déterministe ─────────────────────────────
-//
-// Triangle dans la zone herbe/forêt confirmée sur la tilemap générée :
-//
-//   A (1500, 525) ─────────────────────► B (1525, 1475)
-//                                          │
-//   C (775, 1000) ◄─────────────────────┘
-//
-// Ces 3 points + leurs segments restent sur la terre (x ≥ 15 tiles, y ∈ 10-30).
-//
-const _B_SPEED = 80; // px/s, identique à SPEED_PX_PER_SEC
-
-const _B_A = { x: 1500, y:  525 }; // haut-droite  (tile 30, 10)
-const _B_B = { x: 1525, y: 1475 }; // bas-droite   (tile 30, 29)
-const _B_C = { x:  775, y: 1000 }; // milieu-gauche (tile 15, 20)
-
-const _B_DIST_AB    = Math.hypot(_B_B.x - _B_A.x, _B_B.y - _B_A.y);
-const _B_DIST_BC    = Math.hypot(_B_C.x - _B_B.x, _B_C.y - _B_B.y);
-const _B_DIST_CA    = Math.hypot(_B_A.x - _B_C.x, _B_A.y - _B_C.y);
-const _B_DIST_TOTAL = _B_DIST_AB + _B_DIST_BC + _B_DIST_CA;
-const _B_CYCLE_MS   = Math.round((_B_DIST_TOTAL / _B_SPEED) * 1000);
-const _B_FRAC_AB    = _B_DIST_AB / _B_DIST_TOTAL;
-const _B_FRAC_BC    = _B_DIST_BC / _B_DIST_TOTAL;
-
-const _B_SEGMENTS = [
-  { from: _B_A, to: _B_B, dist: _B_DIST_AB, fracStart: 0,                        fracEnd: _B_FRAC_AB                },
-  { from: _B_B, to: _B_C, dist: _B_DIST_BC, fracStart: _B_FRAC_AB,               fracEnd: _B_FRAC_AB + _B_FRAC_BC  },
-  { from: _B_C, to: _B_A, dist: _B_DIST_CA, fracStart: _B_FRAC_AB + _B_FRAC_BC,  fracEnd: 1                        },
-];
-
-function _botaniste_computeState(now) {
-  const cycleStart = Math.floor(now / _B_CYCLE_MS) * _B_CYCLE_MS;
-  const phase      = (now - cycleStart) / _B_CYCLE_MS;
-
-  const seg       = _B_SEGMENTS.find((s) => phase < s.fracEnd) || _B_SEGMENTS[_B_SEGMENTS.length - 1];
-  const fracInSeg = (phase - seg.fracStart) / (seg.fracEnd - seg.fracStart);
-
-  const x = seg.from.x + (seg.to.x - seg.from.x) * fracInSeg;
-  const y = seg.from.y + (seg.to.y - seg.from.y) * fracInSeg;
-
-  const durationMs = Math.round((seg.dist / _B_SPEED) * 1000);
-  // startTs recalé : elapsed = now - startTs = fracInSeg * durationMs
-  // → frac côté client = fracInSeg ∈ [0, 1) → Animated.timing repart immédiatement
-  const startTs  = now - Math.round(fracInSeg * durationMs);
-  const remainMs = Math.round((1 - fracInSeg) * durationMs);
-
-  return {
-    x, y,
-    target: {
-      fromX: seg.from.x, fromY: seg.from.y,
-      toX:   seg.to.x,   toY:   seg.to.y,
-      startTs,
-      durationMs,
-    },
-    lastSeen: now + remainMs,
-  };
-}
-
-async function injectBotaniste() {
-  if (!db) return;
-  const now   = Date.now();
-  const state = _botaniste_computeState(now);
-  await update(ref(db, 'players/botaniste_rebelle'), {
-    id:       'botaniste_rebelle',
-    name:     'La Botaniste Rebelle',
-    color:    '#5dca8b',
-    outfit:   'green',
-    skin:     'light',
-    hair:     'black',
-    hat:      'none',
-    x:        state.x,
-    y:        state.y,
-    target:   state.target,
-    lastSeen: state.lastSeen,
-  }).catch(() => {});
-}
-
-// ──────────────────────────────────────────────────────────────────────────────────────
 
 export async function joinMultiplayer({ playerId, name, color, x, y, outfit, skin, hair, hat }) {
   ensureInit();
@@ -132,12 +51,6 @@ export async function joinMultiplayer({ playerId, name, color, x, y, outfit, ski
     lastSeen: Date.now(),
   });
   onDisconnect(myRef).update({ lastSeen: Date.now() - 60_000 });
-
-  // Injection immédiate + refresh toutes les 10s tant qu'un joueur est connecté
-  // → garantit que frac < 1 et que le cycle du triangle continue sans interruption
-  await injectBotaniste();
-  if (_botInterval) clearInterval(_botInterval);
-  _botInterval = setInterval(injectBotaniste, 10_000);
 
   const allRef = ref(db, 'players');
   unsubAll = onValue(allRef, (snap) => {
@@ -227,10 +140,6 @@ export function subscribeLetters(cb) {
 }
 
 export async function leaveMultiplayer() {
-  if (_botInterval) {
-    clearInterval(_botInterval);
-    _botInterval = null;
-  }
   if (myRef) {
     await update(myRef, { lastSeen: Date.now() - 60_000 }).catch(() => {});
     myRef = null;
