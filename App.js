@@ -334,13 +334,84 @@ export default function App() {
       if (entry.anim) entry.anim.stop();
 
       if (p.target) {
-        const remainingMs = Math.max(50, p.target.durationMs - (Date.now() - p.target.startTs));
-        const par = Animated.parallel([
-          Animated.timing(entry.x, { toValue: p.target.toX, duration: remainingMs, easing: Easing.linear, useNativeDriver: true }),
-          Animated.timing(entry.y, { toValue: p.target.toY, duration: remainingMs, easing: Easing.linear, useNativeDriver: true }),
-        ]);
-        entry.anim = par;
-        par.start();
+        // Reconstruit le trajet en local : pathfinding déterministe sur la même tilemap.
+        // Firebase ne transporte que from/to + startTs/durationMs.
+        const t = p.target;
+        const fromTx = Math.floor(t.fromX / TILE_PX);
+        const fromTy = Math.floor(t.fromY / TILE_PX);
+        const toTx = Math.floor(t.toX / TILE_PX);
+        const toTy = Math.floor(t.toY / TILE_PX);
+        const cellPath = findPath(TILES_DATA, MAP_W, MAP_H, fromTx, fromTy, toTx, toTy);
+
+        let samples;
+        if (cellPath && cellPath.length >= 2) {
+          samples = cellPath.map((c) => ({
+            x: c.x * TILE_PX + TILE_PX / 2,
+            y: c.y * TILE_PX + TILE_PX / 2,
+          }));
+          // Cale exactement les extrémités sur les coords envoyées
+          samples[0] = { x: t.fromX, y: t.fromY };
+          samples[samples.length - 1] = { x: t.toX, y: t.toY };
+        } else {
+          // Fallback : ligne droite si pathfinding échoue
+          samples = [
+            { x: t.fromX, y: t.fromY },
+            { x: t.toX, y: t.toY },
+          ];
+        }
+
+        // Distances cumulées
+        const cum = [0];
+        let total = 0;
+        for (let i = 1; i < samples.length; i++) {
+          total += Math.hypot(samples[i].x - samples[i - 1].x, samples[i].y - samples[i - 1].y);
+          cum.push(total);
+        }
+
+        const elapsed = Math.max(0, Date.now() - t.startTs);
+        const frac = total > 0 ? Math.min(1, elapsed / t.durationMs) : 1;
+
+        if (frac >= 1) {
+          // Déjà arrivé
+          entry.x.setValue(t.toX);
+          entry.y.setValue(t.toY);
+          entry.anim = null;
+        } else {
+          const elapsedDist = frac * total;
+          // Trouve le segment courant
+          let seg = 1;
+          while (seg < cum.length && cum[seg] < elapsedDist) seg++;
+          const a = samples[seg - 1];
+          const b = samples[seg];
+          const segLen = cum[seg] - cum[seg - 1];
+          const tInSeg = segLen > 0 ? (elapsedDist - cum[seg - 1]) / segLen : 0;
+          const startX = a.x + (b.x - a.x) * tInSeg;
+          const startY = a.y + (b.y - a.y) * tInSeg;
+          entry.x.setValue(startX);
+          entry.y.setValue(startY);
+
+          // Construit la séquence : fin du segment courant + segments restants
+          const steps = [];
+          const firstSegRemaining = segLen * (1 - tInSeg);
+          if (firstSegRemaining > 0) {
+            steps.push({ x: b.x, y: b.y, dist: firstSegRemaining });
+          }
+          for (let i = seg + 1; i < samples.length; i++) {
+            steps.push({ x: samples[i].x, y: samples[i].y, dist: cum[i] - cum[i - 1] });
+          }
+
+          const remainingMs = Math.max(50, t.durationMs - elapsed);
+          const animations = steps.map((s) => {
+            const dur = total > 0 ? Math.max(16, (s.dist / total) * t.durationMs) : remainingMs;
+            return Animated.parallel([
+              Animated.timing(entry.x, { toValue: s.x, duration: dur, easing: Easing.linear, useNativeDriver: true }),
+              Animated.timing(entry.y, { toValue: s.y, duration: dur, easing: Easing.linear, useNativeDriver: true }),
+            ]);
+          });
+          const seq = animations.length === 1 ? animations[0] : Animated.sequence(animations);
+          entry.anim = seq;
+          seq.start();
+        }
       } else {
         entry.x.setValue(p.x);
         entry.y.setValue(p.y);
@@ -926,7 +997,7 @@ export default function App() {
                         <DottedTrail
                           samples={frozenActivePath}
                           color="#3a7ea8" spacing={30} size={5} opacity={0.55}
-                          minDist={consumedDist}
+                          minDist={consumedDist + 40}
                         />
                       )}
 
