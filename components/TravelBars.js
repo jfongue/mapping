@@ -57,8 +57,8 @@ export function TravelingBar({ eta, onStop }) {
         <Text style={styles.timer}>{label}</Text>
       </View>
       {onStop && (
-        <TouchableOpacity style={styles.stopBtn} onPress={onStop}>
-          <Text style={styles.stopText}>⏸  Stop</Text>
+        <TouchableOpacity style={styles.stopSide} onPress={onStop}>
+          <Text style={styles.btnGoText}>Arrêter</Text>
         </TouchableOpacity>
       )}
     </View>
@@ -116,4 +116,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   stopText: { color: '#fffbe8', fontSize: 13, fontWeight: '700' },
+  stopSide: {
+    backgroundColor: '#3a7ea8',
+    paddingHorizontal: 22,
+    justifyContent: 'center', alignItems: 'center',
+    borderLeftWidth: 1, borderLeftColor: 'rgba(58,38,20,0.2)',
+  },
 });

@@ -29,13 +29,30 @@ import { THEME } from './src/theme';
 
 const INVENTORY_KEY = '@treasureProto.inventory.v1';
 // Distance max (px) entre un pendingTarget et un message pour déclencher le ramassage auto.
-const LETTER_PICKUP_RADIUS = 64;
+const LETTER_PICKUP_RADIUS = 130;
+// Distance max (px) entre un pendingTarget et un autre joueur pour libeller la preview "Voyage vers {nom}".
+const PLAYER_NEAR_RADIUS = 130;
 // Tolérance (px écran) en-dessous de laquelle le perso est considéré "centré" → bouton recenter caché.
 const RECENTER_HIDE_RADIUS = 90;
 import { TILES_DATA, MAP_W, MAP_H, TILE_PX, findPath } from './src/tilemap';
-import { smoothPath, sampleAt } from './src/smoothing';
+import { sampleAt } from './src/smoothing';
 import TileLayer, { MAP_W_PX, MAP_H_PX } from './components/TileLayer';
-import PathOverlay from './components/PathOverlay';
+import DottedTrail from './components/DottedTrail';
+
+// Construit waypoints + longueur totale à partir d'un cellPath, sans aucun lissage.
+// Ligne droite tile-à-tile : O(n), pas de Catmull-Rom, pas d'oversampling.
+function buildStraightPath(cellPath, startPx) {
+  const wps = cellPath.map((c) => ({
+    x: c.x * TILE_PX + TILE_PX / 2,
+    y: c.y * TILE_PX + TILE_PX / 2,
+  }));
+  if (startPx) wps[0] = { x: startPx.x, y: startPx.y };
+  let length = 0;
+  for (let i = 1; i < wps.length; i++) {
+    length += Math.hypot(wps[i].x - wps[i - 1].x, wps[i].y - wps[i - 1].y);
+  }
+  return { samples: wps, length };
+}
 
 const MAP_SIZE = MAP_W_PX;
 const SPAWN = { x: (MAP_W / 2) * TILE_PX, y: (MAP_H / 2) * TILE_PX };
@@ -46,7 +63,6 @@ import { formatMeters, formatDuration } from './src/format';
 import { movementDuration, lerpFromTarget, remainingDurationAt } from './src/movement';
 import { generateProfile, isPlayerOnline } from './src/profile';
 
-import AnimatedDottedLine from './components/AnimatedDottedLine';
 import SleepyZzz from './components/SleepyZzz';
 import SmoothEdgeArrow from './components/SmoothEdgeArrow';
 import SettingsModal from './components/SettingsModal';
@@ -102,7 +118,6 @@ export default function App() {
 
   // ===== Animations =====
   const bounce = useRef(new Animated.Value(0)).current;
-  const dashPhase = useRef(new Animated.Value(0)).current;
   const breathe = useRef(new Animated.Value(0)).current;
 
   // ===== Speed debug =====
@@ -137,6 +152,9 @@ export default function App() {
   // ===== Path en cours =====
   const activePathRef = useRef(null);
   const [frozenActivePath, setFrozenActivePath] = useState(null);
+  // Distance déjà parcourue le long du chemin actif (pour effacer les dots passés).
+  const [consumedDist, setConsumedDist] = useState(0);
+  const lastConsumedTick = useRef(0);
 
   // ===== Tick global online check =====
   const globalNowRef = useRef(Date.now());
@@ -408,18 +426,7 @@ export default function App() {
     return () => loop.stop();
   }, [moving]);
 
-  // Pointillés animés
-  useEffect(() => {
-    let cancelled = false;
-    const tick = () => {
-      if (cancelled) return;
-      dashPhase.setValue(0);
-      Animated.timing(dashPhase, { toValue: 1, duration: 700, easing: Easing.linear, useNativeDriver: false })
-        .start(({ finished }) => { if (!cancelled && finished) tick(); });
-    };
-    tick();
-    return () => { cancelled = true; };
-  }, []);
+  // (Pointillés animés supprimés — DottedTrail statique, plus performant.)
 
   // Respiration douce offline
   useEffect(() => {
@@ -465,9 +472,7 @@ export default function App() {
     const fy = Math.floor(last.y / TILE_PX);
     const cellPath = findPath(TILES_DATA, MAP_W, MAP_H, sx, sy, fx, fy);
     if (!cellPath) return;
-    const wps = cellPath.map((c) => ({ x: c.x * TILE_PX + TILE_PX / 2, y: c.y * TILE_PX + TILE_PX / 2 }));
-    wps[0] = { x: cx, y: cy };
-    const { samples: newSamples, length } = smoothPath(wps);
+    const { samples: newSamples, length } = buildStraightPath(cellPath, { x: cx, y: cy });
     activePathRef.current = newSamples;
     startMoveAlongCurve(newSamples, length);
   }, [speedMul]);
@@ -564,6 +569,17 @@ export default function App() {
     return best;
   };
 
+  // Cherche un autre joueur à proximité d'un point. Sert à libeller la preview.
+  const findPlayerNearPoint = (px, py, radius = PLAYER_NEAR_RADIUS) => {
+    let best = null, bestD = radius;
+    for (const p of otherPlayers) {
+      const pp = computePlayerPos(p);
+      const d = Math.hypot(pp.x - px, pp.y - py);
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    return best;
+  };
+
   // === ACTIONS ===
 
   const handleTap = (evt) => {
@@ -589,16 +605,17 @@ export default function App() {
     const ty = Math.floor(goalY / TILE_PX);
     const cellPath = findPath(TILES_DATA, MAP_W, MAP_H, sx, sy, tx, ty);
     if (!cellPath) return;
-    const wps = cellPath.map((c) => ({
-      x: c.x * TILE_PX + TILE_PX / 2,
-      y: c.y * TILE_PX + TILE_PX / 2,
-    }));
-    wps[0] = { x: pos.x, y: pos.y };
-    const { samples, length } = smoothPath(wps);
-    const finalPx = wps[wps.length - 1];
+    const { samples, length } = buildStraightPath(cellPath, pos);
+    const finalPx = samples[samples.length - 1];
     // Détecte un message à ramasser à l'arrivée
     const pickupLetter = nearLetter || findLetterNearPoint(finalPx.x, finalPx.y);
-    setPendingTarget({ ...finalPx, samples, length, pickupLetter: pickupLetter || null });
+    // Détecte un joueur proche de la destination (libellé preview uniquement)
+    const nearPlayer = pickupLetter ? null : findPlayerNearPoint(finalPx.x, finalPx.y);
+    setPendingTarget({
+      ...finalPx, samples, length,
+      pickupLetter: pickupLetter || null,
+      nearPlayer: nearPlayer || null,
+    });
   };
 
   // === Letters handlers ===
@@ -650,6 +667,19 @@ export default function App() {
 
   const cancelMove = () => setPendingTarget(null);
 
+  // Arrête le voyage en cours, ferme proprement les listeners et fige le perso à sa position courante.
+  const stopMove = () => {
+    if (currentAnim.current) currentAnim.current.stop();
+    if (progressListenerId.current && progressRef.current) {
+      progressRef.current.removeListener(progressListenerId.current);
+      progressListenerId.current = null;
+    }
+    pendingPickupRef.current = null;
+    const cx = animX.__getValue();
+    const cy = animY.__getValue();
+    finalizeArrival({ x: cx, y: cy });
+  };
+
   const progressRef = useRef(null);
   const progressListenerId = useRef(null);
 
@@ -661,6 +691,8 @@ export default function App() {
     moveBaseDuration.current = baseDuration;
     setMoving(true);
     setEta(Date.now() + dur);
+    setConsumedDist(0);
+    lastConsumedTick.current = 0;
 
     announceMove({
       from: { x: pos.x, y: pos.y },
@@ -671,10 +703,16 @@ export default function App() {
 
     const progress = new Animated.Value(0);
     progressRef.current = progress;
+    // Tick de mise à jour des dots consommés : toutes les ~26 px (= 1 dot)
+    const DOT_TICK = 26;
     progressListenerId.current = progress.addListener(({ value }) => {
       const p = sampleAt(samples, value);
       animX.setValue(p.x);
       animY.setValue(p.y);
+      if (value - lastConsumedTick.current >= DOT_TICK) {
+        lastConsumedTick.current = value;
+        setConsumedDist(value);
+      }
     });
 
     const anim = Animated.timing(progress, {
@@ -704,6 +742,8 @@ export default function App() {
     setTarget(null);
     activePathRef.current = null;
     setFrozenActivePath(null);
+    setConsumedDist(0);
+    lastConsumedTick.current = 0;
     currentAnim.current = null;
     moveTarget.current = null;
 
@@ -873,17 +913,21 @@ export default function App() {
                       {/* Tilemap */}
                       <TileLayer />
 
-                      {/* Preview : courbe pathfinding (bleu pointillé) */}
+                      {/* Preview : trail pointillé léger (Views natives) */}
                       {pendingTarget && (
-                        <PathOverlay
+                        <DottedTrail
                           samples={pendingTarget.samples}
-                          color="#3a7ea8" dashed opacity={0.95}
+                          color="#3a7ea8" spacing={26} size={6} opacity={0.95}
                         />
                       )}
 
-                      {/* Chemin actif figé */}
+                      {/* Chemin actif figé : trail un peu plus discret. Les dots passés sont effacés. */}
                       {frozenActivePath && (
-                        <PathOverlay samples={frozenActivePath} color="#3a7ea8" dashed={false} opacity={0.7} />
+                        <DottedTrail
+                          samples={frozenActivePath}
+                          color="#3a7ea8" spacing={30} size={5} opacity={0.55}
+                          minDist={consumedDist}
+                        />
                       )}
 
                       {/* Lettres déposées */}
@@ -920,10 +964,9 @@ export default function App() {
                         </View>
                       )}
 
-                      {/* Preview pointillés */}
+                      {/* Marqueur destination preview */}
                       {pendingTarget && (
                         <>
-                          <AnimatedDottedLine from={pos} to={pendingTarget} phase={dashPhase} />
                           <View style={[styles.previewTargetOuter, { left: pendingTarget.x - 18, top: pendingTarget.y - 18 }]} />
                           <View style={[styles.previewTargetInner, { left: pendingTarget.x - 6, top: pendingTarget.y - 6 }]} />
                         </>
@@ -1023,7 +1066,7 @@ export default function App() {
 
         {/* TravelingBar pendant déplacement */}
         {moving && (
-          <TravelingBar eta={eta} onStop={null} />
+          <TravelingBar eta={eta} onStop={stopMove} />
         )}
 
         {/* Bouton recenter — visible uniquement si l'utilisateur a réellement pané */}
@@ -1091,7 +1134,9 @@ export default function App() {
             destLabel={
               pendingTarget.pickupLetter
                 ? `Message de ${pendingTarget.pickupLetter.authorName || 'Anonyme'}`
-                : `${Math.round(pendingTarget.x / TILE_PX)}, ${Math.round(pendingTarget.y / TILE_PX)}`
+                : pendingTarget.nearPlayer
+                  ? (pendingTarget.nearPlayer.name || 'Inconnu')
+                  : `${Math.round(pendingTarget.x / TILE_PX)}, ${Math.round(pendingTarget.y / TILE_PX)}`
             }
             onCancel={cancelMove}
             onConfirm={confirmMove}
