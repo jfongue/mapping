@@ -6,7 +6,7 @@
  * tourner ce script en continu.
  *
  * Ce script :
- *   1. Calcule le « segment » courant (tranche de temps variable)
+ *   1. Calcule le « segment » courant (tranche de 20 min)
  *   2. Dérive la position de départ et d'arrivée via un PRNG seedé
  *      par le numéro de segment → même seed = même trajet
  *      La distance est garantie entre MIN_TRIP_PX et MAX_TRIP_PX,
@@ -19,20 +19,25 @@
  *          id, name, color,
  *          x, y (position réelle au moment du write),
  *          target: { fromX, fromY, toX, toY, startTs, durationMs },
- *          lastSeen
+ *          lastSeen  (= fin du segment, pas now — voir ci-dessous)
  *        }
  *   5. S'arrête — le client interpole la position via lerpFromTarget()
  *
- * Usage : node scripts/botaniste.js
- * Env   : FIREBASE_DB_URL (optionnel, sinon utilise l'URL hard-codée)
+ * Pourquoi lastSeen = fin du segment ?
+ *   ONLINE_THRESHOLD_MS = 30 000 ms. Si on écrit lastSeen = now,
+ *   la Botaniste passe offline 30s après le write. En écrivant
+ *   lastSeen = startTs + durationMs (fin du segment), elle reste
+ *   "online" pendant toute la durée du voyage. Le prochain run du
+ *   cron (dans 20 min max) écrira le segment suivant avant expiration.
  *
- * GitHub Actions relance ce script toutes les ~20 min.
+ * Usage : node scripts/botaniste.js
+ * Env   : FIREBASE_DB_URL (optionnel)
  */
 
 const { initializeApp, deleteApp } = require('firebase/app');
 const { getDatabase, ref, update } = require('firebase/database');
 
-// ─── Config Firebase (même que firebase.js) ──────────────────────────────────
+// ─── Config Firebase ───────────────────────────────────────────────────────
 const FIREBASE_CONFIG = {
   apiKey: 'AIzaSyC63kxXSMBKycCMedL4mGl3rB6atk4TstE',
   authDomain: 'treasure-quest-proto.firebaseapp.com',
@@ -45,31 +50,22 @@ const FIREBASE_CONFIG = {
   appId: '1:176526916404:web:2dab74b18dd293aff2c361',
 };
 
-// ─── Constantes carte (doit rester cohérent avec tilemap.js) ─────────────────
+// ─── Constantes ───────────────────────────────────────────────────────────────────
 const MAP_W = 40;
 const MAP_H = 40;
 const TILE_PX = 50;
-const SPEED_PX_PER_SEC = 80;
 
-// Distance minimale et maximale entre deux waypoints (en px).
-// MAP_SIZE = 2000 px → diagonale ≈ 2828 px.
-// MIN_TRIP_PX = 900  → ~45 tiles de distance, soit bien plus de la moitié de la map.
-// MAX_TRIP_PX = 1800 → quasi traversée complète.
-const MIN_TRIP_PX = 900;
-const MAX_TRIP_PX = 1800;
+// 20 min = cron cadence. Le client recevra TOUJOURS un target en cours.
+// Cohérent avec MAX_DURATION_MS = 60 000 — on envoie durationMs = SEGMENT_MS
+// mais le client ignore MAX_DURATION_MS pour les joueurs autres (il utilise
+// directement target.durationMs).
+const SEGMENT_MS = 20 * 60 * 1000; // 1 200 000 ms
 
-// Durée min/max d'un segment (garde-fou en cas de waypoints trop proches/loin).
-const MIN_SEGMENT_MS = 12_000;
-const MAX_SEGMENT_MS = 30_000;
-
-// ID fixe — toujours le même nœud dans Firebase
-const BOTANISTE_ID = 'botaniste_rebelle';
-
-// Couleur signature : vert mousse
+const BOTANISTE_ID    = 'botaniste_rebelle';
 const BOTANISTE_COLOR = '#5dca8b';
 
-// ─── Tiles walkables (doit rester cohérent avec tilemap.js) ──────────────────
-const WALKABLE = { 1: true, 2: true, 3: true }; // beach, plain, forest
+// ─── Map walkable (identique à tilemap.js) ───────────────────────────────────
+const WALKABLE = { 1: true, 2: true, 3: true };
 
 function makeRandSeeded(seed) {
   let s = (seed ^ 0xdeadbeef) >>> 0;
@@ -82,24 +78,17 @@ function makeRandSeeded(seed) {
   };
 }
 
-// Reproduit buildDemoMap() de tilemap.js pour identifier les tiles marchables.
 function buildMap() {
-  const TILES = { WATER: 0, BEACH: 1, PLAIN: 2, FOREST: 3, ROCK: 4, VOLCANO: 5 };
-  const cx = MAP_W / 2;
-  const cy = MAP_H / 2;
+  const cx = MAP_W / 2, cy = MAP_H / 2;
   const maxR = Math.min(MAP_W, MAP_H) / 2;
 
   function makeLcg(seed) {
     let s = seed;
-    return () => {
-      s = (s * 1103515245 + 12345) & 0x7fffffff;
-      return s / 0x7fffffff;
-    };
+    return () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
   }
 
   function smoothedNoise(W, H, scale, rand) {
-    const lowW = Math.ceil(W / scale) + 2;
-    const lowH = Math.ceil(H / scale) + 2;
+    const lowW = Math.ceil(W / scale) + 2, lowH = Math.ceil(H / scale) + 2;
     const low = new Float32Array(lowW * lowH);
     for (let i = 0; i < low.length; i++) low[i] = rand();
     const out = new Float32Array(W * H);
@@ -108,13 +97,10 @@ function buildMap() {
         const fx = x / scale, fy = y / scale;
         const ix = Math.floor(fx), iy = Math.floor(fy);
         const tx2 = fx - ix, ty2 = fy - iy;
-        const a = low[iy * lowW + ix];
-        const b = low[iy * lowW + (ix + 1)];
-        const c = low[(iy + 1) * lowW + ix];
-        const d = low[(iy + 1) * lowW + (ix + 1)];
-        const sx = tx2 * tx2 * (3 - 2 * tx2);
-        const sy = ty2 * ty2 * (3 - 2 * ty2);
-        out[y * W + x] = (a * (1 - sx) + b * sx) * (1 - sy) + (c * (1 - sx) + d * sx) * sy;
+        const a = low[iy * lowW + ix], b = low[iy * lowW + (ix+1)];
+        const c = low[(iy+1) * lowW + ix], d = low[(iy+1) * lowW + (ix+1)];
+        const sx = tx2*tx2*(3-2*tx2), sy = ty2*ty2*(3-2*ty2);
+        out[y*W+x] = (a*(1-sx)+b*sx)*(1-sy)+(c*(1-sx)+d*sx)*sy;
       }
     }
     return out;
@@ -126,194 +112,92 @@ function buildMap() {
 
   for (let y = 0; y < MAP_H; y++) {
     for (let x = 0; x < MAP_W; x++) {
-      const ndx = (x - cx) / maxR;
-      const ndy = (y - cy) / maxR;
-      const d = Math.sqrt(ndx * ndx + ndy * ndy);
-      const ne = noiseElev[y * MAP_W + x];
-      const nb = noiseBiome[y * MAP_W + x];
-      const elevation = 1 - d + (ne - 0.5) * 0.5;
+      const ndx = (x-cx)/maxR, ndy = (y-cy)/maxR;
+      const d = Math.sqrt(ndx*ndx+ndy*ndy);
+      const ne = noiseElev[y*MAP_W+x], nb = noiseBiome[y*MAP_W+x];
+      const elev = 1 - d + (ne-0.5)*0.5;
       let t;
-      if (elevation < -0.02) t = TILES.WATER;
-      else if (elevation < 0.1) t = TILES.BEACH;
-      else if (elevation > 0.55 && nb > 0.55) t = TILES.ROCK;
-      else if (nb > 0.62 && elevation > 0.2) t = TILES.FOREST;
-      else t = TILES.PLAIN;
-      tiles[y * MAP_W + x] = t;
+      if      (elev < -0.02)                  t = 0;
+      else if (elev < 0.1)                    t = 1;
+      else if (elev > 0.55 && nb > 0.55)      t = 4;
+      else if (nb > 0.62 && elev > 0.2)       t = 3;
+      else                                    t = 2;
+      tiles[y*MAP_W+x] = t;
     }
   }
-
-  // 2 passes majority filter (identique à tilemap.js)
   const tmp = new Uint8Array(MAP_W * MAP_H);
   for (let pass = 0; pass < 2; pass++) {
     for (let y = 0; y < MAP_H; y++) {
       for (let x = 0; x < MAP_W; x++) {
         const counts = {};
-        for (let oy = -1; oy <= 1; oy++) {
-          for (let ox = -1; ox <= 1; ox++) {
-            const nx = x + ox, ny = y + oy;
-            if (nx < 0 || ny < 0 || nx >= MAP_W || ny >= MAP_H) continue;
-            const tt = tiles[ny * MAP_W + nx];
-            counts[tt] = (counts[tt] || 0) + 1;
-          }
+        for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
+          const nx = x+ox, ny = y+oy;
+          if (nx<0||ny<0||nx>=MAP_W||ny>=MAP_H) continue;
+          const tt = tiles[ny*MAP_W+nx]; counts[tt]=(counts[tt]||0)+1;
         }
-        let best = tiles[y * MAP_W + x], bestCount = 0;
-        for (const k in counts) {
-          if (counts[k] > bestCount) { bestCount = counts[k]; best = +k; }
-        }
-        tmp[y * MAP_W + x] = best;
+        let best = tiles[y*MAP_W+x], bc = 0;
+        for (const k in counts) if (counts[k]>bc) { bc=counts[k]; best=+k; }
+        tmp[y*MAP_W+x] = best;
       }
     }
     tiles.set(tmp);
   }
-
-  // Spawn central garanti
-  const sx = Math.floor(MAP_W / 2);
-  const sy = Math.floor(MAP_H / 2);
-  for (let oy = -2; oy <= 2; oy++) {
-    for (let ox = -2; ox <= 2; ox++) {
-      tiles[(sy + oy) * MAP_W + (sx + ox)] = TILES.PLAIN;
-    }
-  }
-
+  const sx = Math.floor(MAP_W/2), sy = Math.floor(MAP_H/2);
+  for (let oy=-2;oy<=2;oy++) for (let ox=-2;ox<=2;ox++) tiles[(sy+oy)*MAP_W+(sx+ox)]=2;
   return tiles;
 }
 
-// Collecte toutes les cellules marchables sur la vraie map
 const MAP_TILES = buildMap();
 const WALKABLE_CELLS = [];
-for (let y = 0; y < MAP_H; y++) {
-  for (let x = 0; x < MAP_W; x++) {
-    if (WALKABLE[MAP_TILES[y * MAP_W + x]]) {
-      WALKABLE_CELLS.push({ x, y });
-    }
-  }
-}
+for (let y = 0; y < MAP_H; y++)
+  for (let x = 0; x < MAP_W; x++)
+    if (WALKABLE[MAP_TILES[y*MAP_W+x]]) WALKABLE_CELLS.push({ x, y });
 
-function dist(a, b) {
-  return Math.hypot(a.x - b.x, a.y - b.y);
-}
-
-/**
- * Choisit un waypoint (centre de tile en px) à partir d'un seed entier.
- */
-function waypointBySeed(seed) {
-  const rng = makeRandSeeded(seed);
+function waypointForSegment(segmentIdx, offset) {
+  const rng = makeRandSeeded(segmentIdx * 1000 + offset);
   const i = Math.floor(rng() * WALKABLE_CELLS.length);
   const cell = WALKABLE_CELLS[i];
+  return { x: cell.x * TILE_PX + TILE_PX/2, y: cell.y * TILE_PX + TILE_PX/2 };
+}
+
+function computeState(now) {
+  const segmentIdx = Math.floor(now / SEGMENT_MS);
+  const startTs    = segmentIdx * SEGMENT_MS;
+  const durationMs = SEGMENT_MS;
+  const from = waypointForSegment(segmentIdx, 0);
+  const to   = waypointForSegment(segmentIdx, 1);
+
+  const t = Math.min(1, (now - startTs) / durationMs);
+  const x = from.x + (to.x - from.x) * t;
+  const y = from.y + (to.y - from.y) * t;
+
   return {
-    x: cell.x * TILE_PX + TILE_PX / 2,
-    y: cell.y * TILE_PX + TILE_PX / 2,
+    x, y,
+    segmentEndTs: startTs + durationMs,
+    target: {
+      fromX: from.x, fromY: from.y,
+      toX: to.x,     toY: to.y,
+      startTs,
+      durationMs,
+    },
   };
 }
 
-/**
- * Calcule la définition d'un segment (from, to, durationMs) de façon
- * totalement déterministe à partir de son index.
- *
- * On tente jusqu'à MAX_ATTEMPTS candidats pour le waypoint d'arrivée
- * afin de garantir une distance dans [MIN_TRIP_PX, MAX_TRIP_PX].
- * Si aucun ne convient, on prend le meilleur trouvé (le plus proche de
- * la fourchette cible).
- */
-const MAX_ATTEMPTS = 30;
-
-function segmentDef(segmentIdx) {
-  const from = waypointBySeed(segmentIdx * 2);
-
-  let best = null;
-  let bestScore = Infinity;
-
-  for (let i = 0; i < MAX_ATTEMPTS; i++) {
-    const candidate = waypointBySeed(segmentIdx * 2 + 1 + i * 97);
-    const d = dist(from, candidate);
-    if (d >= MIN_TRIP_PX && d <= MAX_TRIP_PX) {
-      best = candidate;
-      break;
-    }
-    // Score = distance à la fourchette idéale
-    const score = d < MIN_TRIP_PX ? MIN_TRIP_PX - d : d - MAX_TRIP_PX;
-    if (score < bestScore) {
-      bestScore = score;
-      best = candidate;
-    }
-  }
-
-  const to = best;
-  const tripPx = dist(from, to);
-  const durationMs = Math.max(
-    MIN_SEGMENT_MS,
-    Math.min(MAX_SEGMENT_MS, Math.round((tripPx / SPEED_PX_PER_SEC) * 1000))
-  );
-
-  return { from, to, durationMs };
-}
-
-/**
- * Calcule l'état courant de La Botaniste en fonction de now.
- *
- * Les segments ont une durée variable (proportionnelle à la distance),
- * donc on les enchaîne depuis t=0 jusqu'à trouver celui qui contient `now`.
- *
- * Pour éviter une boucle infinie si `now` est très grand, on travaille
- * avec un epoch relatif à minuit du jour courant (UTC).
- */
-function computeState(now) {
-  // Epoch relatif au début de la journée UTC (reset quotidien des segments)
-  const dayStart = now - (now % (24 * 3600 * 1000));
-  let cursor = dayStart;
-  let segmentIdx = 0;
-
-  // Limite de sécurité : 24h / MIN_SEGMENT_MS = max ~7200 segments/jour
-  while (segmentIdx < 7200) {
-    const seg = segmentDef(segmentIdx);
-    const end = cursor + seg.durationMs;
-    if (end > now) {
-      // Ce segment est le segment courant
-      const t = Math.min(1, (now - cursor) / seg.durationMs);
-      const x = seg.from.x + (seg.to.x - seg.from.x) * t;
-      const y = seg.from.y + (seg.to.y - seg.from.y) * t;
-
-      return {
-        x,
-        y,
-        segmentIdx,
-        target: {
-          fromX: seg.from.x,
-          fromY: seg.from.y,
-          toX:   seg.to.x,
-          toY:   seg.to.y,
-          startTs: cursor,
-          durationMs: seg.durationMs,
-        },
-      };
-    }
-    cursor = end;
-    segmentIdx += 1;
-  }
-
-  // Fallback (ne devrait pas arriver)
-  return computeState(dayStart);
-}
-
-// ─── Main ─────────────────────────────────────────────────────────────────────
+// ─── Main ──────────────────────────────────────────────────────────────────
 async function main() {
-  const now = Date.now();
+  const now   = Date.now();
   const state = computeState(now);
-  const tripPx = dist(
-    { x: state.target.fromX, y: state.target.fromY },
-    { x: state.target.toX,   y: state.target.toY }
-  );
+  const remainSec = ((state.segmentEndTs - now) / 1000).toFixed(1);
 
   console.log('🌿 La Botaniste Rebelle');
-  console.log(`   segment  : ${state.segmentIdx}`);
-  console.log(`   distance : ${tripPx.toFixed(0)} px`);
-  console.log(`   durée    : ${(state.target.durationMs / 1000).toFixed(1)} s`);
-  console.log(`   position : (${state.x.toFixed(1)}, ${state.y.toFixed(1)})`);
-  console.log(`   → vers   : (${state.target.toX.toFixed(1)}, ${state.target.toY.toFixed(1)})`);
-  console.log(`   reste    : ${((state.target.startTs + state.target.durationMs - now) / 1000).toFixed(1)}s`);
+  console.log(`   segment   : ${Math.floor(now / SEGMENT_MS)}`);
+  console.log(`   position  : (${state.x.toFixed(1)}, ${state.y.toFixed(1)})`);
+  console.log(`   → vers    : (${state.target.toX.toFixed(1)}, ${state.target.toY.toFixed(1)})`);
+  console.log(`   reste     : ${remainSec}s`);
+  console.log(`   lastSeen  : fin du segment (dans ${remainSec}s)`);
 
   const app = initializeApp(FIREBASE_CONFIG);
-  const db = getDatabase(app);
+  const db  = getDatabase(app);
   const playerRef = ref(db, `players/${BOTANISTE_ID}`);
 
   await update(playerRef, {
@@ -327,7 +211,10 @@ async function main() {
     x:        state.x,
     y:        state.y,
     target:   state.target,
-    lastSeen: now,
+    // lastSeen = fin du segment : la Botaniste reste online
+    // (seuil ONLINE_THRESHOLD_MS = 30s) pendant tout le voyage.
+    // Le cron suivant (dans 20min max) écrira avant expiration.
+    lastSeen: state.segmentEndTs,
   });
 
   console.log('✅ Firebase mis à jour.');
