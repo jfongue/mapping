@@ -1,4 +1,4 @@
-// Système de tiles : map unique (data hard-codé pour l'instant) + pathfinding BFS.
+// Système de tiles : map 128×128 procédurale + pathfinding A*.
 
 export const TILES = {
   WATER: 0,
@@ -18,23 +18,20 @@ export const WALKABLE = {
   5: false, // volcano
 };
 
-// Coût de marche par tile (1 = normal). Forêt = 1/0.75 = 1.33 (plus lent).
 export const WALK_COST = {
   1: 1.0,
   2: 1.0,
-  3: 1.33, // forêt 0.75x speed
+  3: 1.33,
 };
 
-// Vitesse multiplicative (pour calculer la durée réelle de traversée d'une tile).
 export const SPEED_MUL_TILE = {
   1: 1.0,
   2: 1.0,
   3: 0.75,
 };
 
-// Couleurs par tile (palette pastel — POC).
 export const TILE_COLORS = {
-  0: '#bce0e8', // water (pastel)
+  0: '#bce0e8', // water
   1: '#faead0', // beach
   2: '#e0eaa8', // plain
   3: '#9ec99e', // forest
@@ -42,15 +39,11 @@ export const TILE_COLORS = {
   5: '#8a7a7e', // volcano
 };
 
-export const TILE_PX = 50; // 1 tile = 50 px
-
-// Map de démo 128×128 (~10× plus grande en surface, 3.2× en longueur) :
-// île centrale, eau autour, forêts, montagnes.
-// 128*50 = 6400 px : reste sous les limites texture GPU (iOS ~8192 px).
+export const TILE_PX = 50;
 export const MAP_W = 128;
 export const MAP_H = 128;
 
-// PRNG seedé déterministe.
+// PRNG seedé déterministe (LCG)
 function makeRand(seed) {
   let s = seed;
   return () => {
@@ -59,7 +52,7 @@ function makeRand(seed) {
   };
 }
 
-// Bruit lissé par cellule (interpolation bilinéaire d'une grille basse résolution).
+// Bruit lissé par interpolation bilinéaire (smooth)
 function smoothedNoise(W, H, scale, rand) {
   const lowW = Math.ceil(W / scale) + 2;
   const lowH = Math.ceil(H / scale) + 2;
@@ -85,38 +78,141 @@ function smoothedNoise(W, H, scale, rand) {
 
 function buildDemoMap() {
   const tiles = new Uint8Array(MAP_W * MAP_H);
-  const cx = MAP_W / 2;
-  const cy = MAP_H / 2;
-  const maxR = Math.min(MAP_W, MAP_H) / 2;
 
-  const rand = makeRand(1234);
-  // Bruit doux : grosse échelle = grosses zones cohérentes (échelle proportionnelle à la map)
-  const noiseElev = smoothedNoise(MAP_W, MAP_H, MAP_W / 5, rand);
-  const noiseBiome = smoothedNoise(MAP_W, MAP_H, MAP_W / 7, makeRand(5678));
+  // Étape 1 : tout en plain par défaut
+  tiles.fill(TILES.PLAIN);
 
+  // Étape 2 : eau en bordure (3 cells tout autour)
+  const BORDER = 3;
   for (let y = 0; y < MAP_H; y++) {
     for (let x = 0; x < MAP_W; x++) {
-      // FIX: renamed from dx/dy → ndx/ndy to avoid TDZ conflict with spawn-patch loop below
-      const ndx = (x - cx) / maxR;
-      const ndy = (y - cy) / maxR;
-      const d = Math.sqrt(ndx * ndx + ndy * ndy);
-      const ne = noiseElev[y * MAP_W + x];
-      const nb = noiseBiome[y * MAP_W + x];
-      const elevation = 1 - d + (ne - 0.5) * 0.5;
-
-      let t;
-      if (elevation < -0.02) t = TILES.WATER;
-      else if (elevation < 0.1) t = TILES.BEACH;
-      else if (elevation > 0.55 && nb > 0.55) t = TILES.ROCK;
-      else if (nb > 0.62 && elevation > 0.2) t = TILES.FOREST;
-      else t = TILES.PLAIN;
-
-      tiles[y * MAP_W + x] = t;
+      if (x < BORDER || x >= MAP_W - BORDER || y < BORDER || y >= MAP_H - BORDER) {
+        tiles[y * MAP_W + x] = TILES.WATER;
+      }
     }
   }
 
-  // 2 passes de "majority filter" : chaque tile prend le type majoritaire de ses voisins.
-  // Counts en typed array (6 types fixes) : pas d'allocation d'objet par tile.
+  // Étape 3 : clusters de ROCK (montagnes) — petits groupes irréguliers
+  {
+    const rand = makeRand(4321);
+    const noiseMtn = smoothedNoise(MAP_W, MAP_H, MAP_W / 14, makeRand(9999));
+    const NUM_CLUSTERS = 10;
+    const MAX_R = 5;
+    const MARGIN = BORDER + 2;
+    for (let c = 0; c < NUM_CLUSTERS; c++) {
+      const cx = MARGIN + Math.floor(rand() * (MAP_W - MARGIN * 2));
+      const cy = MARGIN + Math.floor(rand() * (MAP_H - MARGIN * 2));
+      const clusterR = 2 + Math.floor(rand() * (MAX_R - 2));
+      for (let dy = -clusterR; dy <= clusterR; dy++) {
+        for (let dx = -clusterR; dx <= clusterR; dx++) {
+          const x = cx + dx, y = cy + dy;
+          if (x < MARGIN || y < MARGIN || x >= MAP_W - MARGIN || y >= MAP_H - MARGIN) continue;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const n = noiseMtn[y * MAP_W + x];
+          if (dist <= clusterR * (0.5 + n * 0.6)) {
+            tiles[y * MAP_W + x] = TILES.ROCK;
+          }
+        }
+      }
+    }
+    // 2 volcans — clusters très petits
+    for (let v = 0; v < 2; v++) {
+      const cx = MARGIN + Math.floor(rand() * (MAP_W - MARGIN * 2));
+      const cy = MARGIN + Math.floor(rand() * (MAP_H - MARGIN * 2));
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          const x = cx + dx, y = cy + dy;
+          if (x < MARGIN || y < MARGIN || x >= MAP_W - MARGIN || y >= MAP_H - MARGIN) continue;
+          if (Math.sqrt(dx * dx + dy * dy) <= 2) tiles[y * MAP_W + x] = TILES.VOLCANO;
+        }
+      }
+    }
+  }
+
+  // Étape 4 : clusters de FOREST — plus nombreux, plus petits
+  {
+    const rand = makeRand(7777);
+    const noiseFor = smoothedNoise(MAP_W, MAP_H, MAP_W / 16, makeRand(3333));
+    const NUM_CLUSTERS = 16;
+    const MAX_R = 4;
+    const MARGIN = BORDER + 2;
+    for (let c = 0; c < NUM_CLUSTERS; c++) {
+      const cx = MARGIN + Math.floor(rand() * (MAP_W - MARGIN * 2));
+      const cy = MARGIN + Math.floor(rand() * (MAP_H - MARGIN * 2));
+      const clusterR = 2 + Math.floor(rand() * (MAX_R - 2));
+      for (let dy = -clusterR; dy <= clusterR; dy++) {
+        for (let dx = -clusterR; dx <= clusterR; dx++) {
+          const x = cx + dx, y = cy + dy;
+          if (x < MARGIN || y < MARGIN || x >= MAP_W - MARGIN || y >= MAP_H - MARGIN) continue;
+          // Ne pas écraser l'eau ou les rochers
+          const t = tiles[y * MAP_W + x];
+          if (t === TILES.WATER || t === TILES.ROCK || t === TILES.VOLCANO) continue;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const n = noiseFor[y * MAP_W + x];
+          if (dist <= clusterR * (0.5 + n * 0.6)) {
+            tiles[y * MAP_W + x] = TILES.FOREST;
+          }
+        }
+      }
+    }
+  }
+
+  // Étape 5 : lacs intérieurs (zones d'eau isolées, loin des bords)
+  {
+    const noiseLake = smoothedNoise(MAP_W, MAP_H, MAP_W / 10, makeRand(6543));
+    const LAKE_MARGIN = BORDER + 6;
+    for (let y = LAKE_MARGIN; y < MAP_H - LAKE_MARGIN; y++) {
+      for (let x = LAKE_MARGIN; x < MAP_W - LAKE_MARGIN; x++) {
+        if (noiseLake[y * MAP_W + x] > 0.78) {
+          tiles[y * MAP_W + x] = TILES.WATER;
+        }
+      }
+    }
+  }
+
+  // Étape 6 : rivières sinueuses (de l'intérieur vers un bord)
+  {
+    const rand = makeRand(1122);
+    const noiseRiv = smoothedNoise(MAP_W, MAP_H, MAP_W / 12, makeRand(8888));
+    const NUM_RIVERS = 3;
+    const MARGIN = BORDER + 4;
+
+    for (let i = 0; i < NUM_RIVERS; i++) {
+      const sx = MARGIN + Math.floor(rand() * (MAP_W - MARGIN * 2));
+      const sy = MARGIN + Math.floor(rand() * (MAP_H - MARGIN * 2));
+      const side = Math.floor(rand() * 4);
+      let ex, ey;
+      switch (side) {
+        case 0: ex = Math.floor(rand() * MAP_W); ey = 0; break;
+        case 1: ex = Math.floor(rand() * MAP_W); ey = MAP_H - 1; break;
+        case 2: ex = 0; ey = Math.floor(rand() * MAP_H); break;
+        default: ex = MAP_W - 1; ey = Math.floor(rand() * MAP_H); break;
+      }
+
+      const steps = MAP_W;
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps;
+        const baseX = sx + (ex - sx) * t;
+        const baseY = sy + (ey - sy) * t;
+        const ddx = ex - sx, ddy = ey - sy;
+        const len = Math.sqrt(ddx * ddx + ddy * ddy) || 1;
+        const off = (noiseRiv[Math.min(MAP_W * MAP_H - 1, Math.floor(baseY) * MAP_W + Math.floor(baseX))] - 0.5) * 8;
+        const px = Math.round(Math.max(0, Math.min(MAP_W - 1, baseX + off * (-ddy / len))));
+        const py = Math.round(Math.max(0, Math.min(MAP_H - 1, baseY + off * (ddx / len))));
+        // Épaisseur 1 (croix 4-connexe)
+        for (let oy = -1; oy <= 1; oy++) {
+          for (let ox = -1; ox <= 1; ox++) {
+            if (Math.abs(ox) + Math.abs(oy) > 1) continue;
+            const nx = px + ox, ny = py + oy;
+            if (nx < 0 || ny < 0 || nx >= MAP_W || ny >= MAP_H) continue;
+            tiles[ny * MAP_W + nx] = TILES.WATER;
+          }
+        }
+      }
+    }
+  }
+
+  // Étape 7 : majority filter (2 passes) pour lisser les frontières
   const tmp = new Uint8Array(MAP_W * MAP_H);
   const counts = new Uint8Array(6);
   for (let pass = 0; pass < 2; pass++) {
@@ -140,13 +236,23 @@ function buildDemoMap() {
     tiles.set(tmp);
   }
 
-  // Spawn central garanti (zone large, proportionnelle à la map)
-  const sx = Math.floor(MAP_W / 2);
-  const sy = Math.floor(MAP_H / 2);
+  // Étape 8 : rétablir la bordure eau après le lissage
+  const BORDER_FINAL = 2;
+  for (let y = 0; y < MAP_H; y++) {
+    for (let x = 0; x < MAP_W; x++) {
+      if (x < BORDER_FINAL || x >= MAP_W - BORDER_FINAL || y < BORDER_FINAL || y >= MAP_H - BORDER_FINAL) {
+        tiles[y * MAP_W + x] = TILES.WATER;
+      }
+    }
+  }
+
+  // Étape 9 : spawn central garanti en PLAIN
+  const spawnX = Math.floor(MAP_W / 2);
+  const spawnY = Math.floor(MAP_H / 2);
   const spawnR = Math.max(3, Math.floor(MAP_W / 50));
   for (let oy = -spawnR; oy <= spawnR; oy++) {
     for (let ox = -spawnR; ox <= spawnR; ox++) {
-      const xx = sx + ox, yy = sy + oy;
+      const xx = spawnX + ox, yy = spawnY + oy;
       if (xx < 0 || xx >= MAP_W || yy < 0 || yy >= MAP_H) continue;
       tiles[yy * MAP_W + xx] = TILES.PLAIN;
     }
@@ -157,14 +263,12 @@ function buildDemoMap() {
 
 export const TILES_DATA = buildDemoMap();
 
-// === Pathfinding A* + tas binaire (scalable jusqu'à grandes maps) ===
-// Heuristique : distance octile (admissible avec déplacements diagonaux).
+// === Pathfinding A* + tas binaire ===
 function octile(ax, ay, bx, by) {
   const dx = Math.abs(ax - bx), dy = Math.abs(ay - by);
   return (dx + dy) + (Math.SQRT2 - 2) * Math.min(dx, dy);
 }
 
-// Tas binaire min, items = [priority, idx]
 class MinHeap {
   constructor() { this.a = []; }
   push(item) {
@@ -245,17 +349,17 @@ export function findPath(tiles, W, H, sx, sy, tx, ty) {
     const x = idx % W, y = (idx / W) | 0;
     const gCur = gScore[idx];
     for (let d = 0; d < 8; d++) {
-      const dx = dirs[d][0], dy = dirs[d][1];
-      const nx = x + dx, ny = y + dy;
+      const ddx = dirs[d][0], ddy = dirs[d][1];
+      const nx = x + ddx, ny = y + ddy;
       if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
       const ni = ny * W + nx;
       if (closed[ni]) continue;
       const tt = tiles[ni];
       if (!WALKABLE[tt]) continue;
-      if (dx !== 0 && dy !== 0) {
+      if (ddx !== 0 && ddy !== 0) {
         if (!WALKABLE[tiles[y * W + nx]] || !WALKABLE[tiles[ny * W + x]]) continue;
       }
-      const stepDist = (dx !== 0 && dy !== 0) ? Math.SQRT2 : 1;
+      const stepDist = (ddx !== 0 && ddy !== 0) ? Math.SQRT2 : 1;
       const cost = stepDist * (WALK_COST[tt] || 1);
       const ng = gCur + cost;
       if (ng < gScore[ni]) {
@@ -276,22 +380,6 @@ export function findPath(tiles, W, H, sx, sy, tx, ty) {
   }
   path.reverse();
   return path;
-}
-
-function simplifyPath(path, tiles, W) {
-  if (path.length <= 2) return path;
-  const out = [path[0]];
-  let i = 0;
-  while (i < path.length - 1) {
-    let j = path.length - 1;
-    while (j > i + 1) {
-      if (lineOfSight(path[i], path[j], tiles, W)) break;
-      j--;
-    }
-    out.push(path[j]);
-    i = j;
-  }
-  return out;
 }
 
 function lineOfSight(a, b, tiles, W) {
