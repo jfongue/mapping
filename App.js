@@ -25,6 +25,13 @@ import {
   TOP_SAFE, SAVE_KEY, PROFILE_KEY,
   PLAYER_COLORS,
 } from './src/constants';
+import { THEME } from './src/theme';
+
+const INVENTORY_KEY = '@treasureProto.inventory.v1';
+// Distance max (px) entre un pendingTarget et un message pour déclencher le ramassage auto.
+const LETTER_PICKUP_RADIUS = 64;
+// Tolérance (px écran) en-dessous de laquelle le perso est considéré "centré" → bouton recenter caché.
+const RECENTER_HIDE_RADIUS = 90;
 import { TILES_DATA, MAP_W, MAP_H, TILE_PX, findPath } from './src/tilemap';
 import { smoothPath, sampleAt } from './src/smoothing';
 import TileLayer, { MAP_W_PX, MAP_H_PX } from './components/TileLayer';
@@ -46,9 +53,10 @@ import SettingsModal from './components/SettingsModal';
 import PlayerDetailModal from './components/PlayerDetailModal';
 import LetterWriteModal from './components/LetterWriteModal';
 import LetterReadModal from './components/LetterReadModal';
+import InventoryModal from './components/InventoryModal';
 import { ConfirmationBar, TravelingBar } from './components/TravelBars';
 import { AdventurerSprite } from './components/Adventurer';
-import { ScrollText } from 'lucide-react-native';
+import { ScrollText, Settings, Crosshair, Backpack } from 'lucide-react-native';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 const INIT_X = SCREEN_W / 2 - MAP_SIZE / 2;
@@ -120,6 +128,12 @@ export default function App() {
   const [letterDraft, setLetterDraft] = useState('');
   const [readingLetter, setReadingLetter] = useState(null);
 
+  // ===== Inventaire =====
+  const [inventory, setInventory] = useState([]);
+  const [inventoryLoaded, setInventoryLoaded] = useState(false);
+  const [inventoryOpen, setInventoryOpen] = useState(false);
+  const unreadCount = inventory.filter((l) => l.unread).length;
+
   // ===== Path en cours =====
   const activePathRef = useRef(null);
   const [frozenActivePath, setFrozenActivePath] = useState(null);
@@ -154,13 +168,12 @@ export default function App() {
   };
 
   /**
-   * Marque l'utilisateur comme ayant pané et affiche le bouton recenter.
-   * Appelé uniquement si le déplacement dépasse PAN_THRESHOLD_PX.
+   * Marque l'utilisateur comme ayant pané : stoppe le follow loop.
+   * Le bouton recenter est piloté indépendamment par la distance à l'écran.
    */
   const markUserHasPanned = () => {
     if (userHasPanned.current) return;
     userHasPanned.current = true;
-    setShowRecenterBtn(true);
     stopFollowLoop();
   };
 
@@ -331,11 +344,53 @@ export default function App() {
     return () => unsub();
   }, []);
 
+  // Charge inventaire
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(INVENTORY_KEY);
+        if (raw) {
+          const data = JSON.parse(raw);
+          if (Array.isArray(data)) setInventory(data);
+        }
+      } catch (e) {}
+      setInventoryLoaded(true);
+    })();
+  }, []);
+
+  // Sauve inventaire
+  useEffect(() => {
+    if (!inventoryLoaded) return;
+    AsyncStorage.setItem(INVENTORY_KEY, JSON.stringify(inventory)).catch(() => {});
+  }, [inventory, inventoryLoaded]);
+
   // Tick global online
   useEffect(() => {
     const id = setInterval(() => { globalNowRef.current = Date.now(); }, 5000);
     return () => clearInterval(id);
   }, []);
+
+  // Polling : affiche le bouton recenter uniquement si le perso est loin du centre écran.
+  useEffect(() => {
+    const id = setInterval(() => {
+      const vw = viewport.w || SCREEN_W;
+      const vh = viewport.h || SCREEN_H;
+      if (!vw || !vh) return;
+      const s = lastScale.current;
+      const charX = animX.__getValue();
+      const charY = animY.__getValue();
+      const offX = lastOffset.current.x + dx.__getValue();
+      const offY = lastOffset.current.y + dy.__getValue();
+      const cx = MAP_W_PX / 2;
+      const cy = MAP_H_PX / 2;
+      const screenX = offX + s * charX + cx * (1 - s);
+      const screenY = offY + s * charY + cy * (1 - s);
+      const dist = Math.hypot(screenX - vw / 2, screenY - vh / 2);
+      const shouldShow = dist > RECENTER_HIDE_RADIUS;
+      setShowRecenterBtn((prev) => (prev === shouldShow ? prev : shouldShow));
+    }, 150);
+    return () => clearInterval(id);
+  }, [viewport.w, viewport.h]);
 
   // Sautillement perso
   useEffect(() => {
@@ -497,15 +552,13 @@ export default function App() {
     return best;
   };
 
-  const LETTER_TAP_RADIUS = 30;
-  const LETTER_READ_DISTANCE = 80;
-  const findTappedLetter = (tap) => {
-    let best = null, bestD = LETTER_TAP_RADIUS;
+  // Cherche un message non-perso à proximité d'un point (px, py).
+  // Utilisé pour détecter si une destination correspond à un ramassage de message.
+  const findLetterNearPoint = (px, py, radius = LETTER_PICKUP_RADIUS) => {
+    let best = null, bestD = radius;
     for (const l of letters) {
       if (!profile || l.authorId === profile.id) continue;
-      const distToMe = Math.hypot(l.x - pos.x, l.y - pos.y);
-      if (distToMe > LETTER_READ_DISTANCE) continue;
-      const d = Math.hypot(l.x - tap.x, l.y - tap.y);
+      const d = Math.hypot(l.x - px, l.y - py);
       if (d < bestD) { bestD = d; best = l; }
     }
     return best;
@@ -515,8 +568,6 @@ export default function App() {
 
   const handleTap = (evt) => {
     const t = { x: evt.nativeEvent.locationX, y: evt.nativeEvent.locationY };
-    const tappedLetter = findTappedLetter(t);
-    if (tappedLetter) { setReadingLetter(tappedLetter); return; }
     const tappedPlayer = findTappedPlayer(t);
     if (tappedPlayer) { setSelectedPlayer(tappedPlayer); return; }
     if (moving) return;
@@ -525,10 +576,17 @@ export default function App() {
       if (d > 30) setPendingTarget(null);
       return;
     }
+    // Si tap proche d'un message non-perso : on cible directement le message
+    const nearLetter = findLetterNearPoint(t.x, t.y, 40);
+    let goalX = t.x, goalY = t.y;
+    if (nearLetter) {
+      goalX = nearLetter.x;
+      goalY = nearLetter.y;
+    }
     const sx = Math.floor(pos.x / TILE_PX);
     const sy = Math.floor(pos.y / TILE_PX);
-    const tx = Math.floor(t.x / TILE_PX);
-    const ty = Math.floor(t.y / TILE_PX);
+    const tx = Math.floor(goalX / TILE_PX);
+    const ty = Math.floor(goalY / TILE_PX);
     const cellPath = findPath(TILES_DATA, MAP_W, MAP_H, sx, sy, tx, ty);
     if (!cellPath) return;
     const wps = cellPath.map((c) => ({
@@ -538,7 +596,9 @@ export default function App() {
     wps[0] = { x: pos.x, y: pos.y };
     const { samples, length } = smoothPath(wps);
     const finalPx = wps[wps.length - 1];
-    setPendingTarget({ ...finalPx, samples, length });
+    // Détecte un message à ramasser à l'arrivée
+    const pickupLetter = nearLetter || findLetterNearPoint(finalPx.x, finalPx.y);
+    setPendingTarget({ ...finalPx, samples, length, pickupLetter: pickupLetter || null });
   };
 
   // === Letters handlers ===
@@ -573,12 +633,16 @@ export default function App() {
     }
   };
 
+  // Lettre à ramasser à l'arrivée (référence stable pendant le mouvement)
+  const pendingPickupRef = useRef(null);
+
   const confirmMove = () => {
     if (!pendingTarget) return;
     const samples = pendingTarget.samples;
     const length = pendingTarget.length;
     activePathRef.current = samples;
     setFrozenActivePath(samples);
+    pendingPickupRef.current = pendingTarget.pickupLetter || null;
     setPendingTarget(null);
     setTarget({ x: pendingTarget.x, y: pendingTarget.y });
     startMoveAlongCurve(samples, length);
@@ -642,6 +706,32 @@ export default function App() {
     setFrozenActivePath(null);
     currentAnim.current = null;
     moveTarget.current = null;
+
+    // Auto-ramassage du message si la cible était proche d'une lettre
+    const pickup = pendingPickupRef.current;
+    pendingPickupRef.current = null;
+    if (pickup && pickup.id) {
+      // Vérifie qu'elle est encore là (pas déjà ramassée par un autre joueur)
+      const stillThere = letters.some((l) => l.id === pickup.id);
+      if (stillThere) {
+        setInventory((prev) => {
+          if (prev.some((l) => l.id === pickup.id)) return prev;
+          return [
+            ...prev,
+            {
+              id: pickup.id,
+              authorId: pickup.authorId,
+              authorName: pickup.authorName,
+              authorColor: pickup.authorColor,
+              text: pickup.text,
+              pickedAt: Date.now(),
+              unread: true,
+            },
+          ];
+        });
+        consumeLetter(pickup.id).catch(() => {});
+      }
+    }
   };
 
   const startMove = (t) => {
@@ -711,7 +801,6 @@ export default function App() {
       lastOffset.current = { x: targetX, y: targetY };
       // Repasse en mode "suivi" : efface le flag pané
       userHasPanned.current = false;
-      setShowRecenterBtn(false);
       // Si le perso est encore en mouvement, démarre le follow loop
       if (moving) startFollowLoop();
     });
@@ -940,7 +1029,7 @@ export default function App() {
         {/* Bouton recenter — visible uniquement si l'utilisateur a réellement pané */}
         {showRecenterBtn && (
           <TouchableOpacity style={styles.recenterBtn} onPress={recenter} activeOpacity={0.75}>
-            <Text style={styles.iconText}>⊕</Text>
+            <Crosshair size={22} color={THEME.text} strokeWidth={2.2} />
           </TouchableOpacity>
         )}
 
@@ -982,35 +1071,42 @@ export default function App() {
           </View>
         )}
 
+        {/* Bouton Inventaire (top-right, à côté de settings) */}
+        <TouchableOpacity style={styles.inventoryBtn} onPress={() => setInventoryOpen(true)} activeOpacity={0.8}>
+          <Backpack size={22} color={THEME.text} strokeWidth={2.2} />
+          {unreadCount > 0 && (
+            <View style={styles.inventoryBadge}>
+              <Text style={styles.inventoryBadgeText}>
+                {unreadCount > 9 ? '9+' : unreadCount}
+              </Text>
+            </View>
+          )}
+        </TouchableOpacity>
+
         {/* ConfirmationBar avant déplacement */}
         {pendingTarget && previewStats && (
           <ConfirmationBar
             distancePx={previewStats.dist}
             durationSec={previewStats.durSec}
-            destLabel={`${Math.round(pendingTarget.x / TILE_PX)}, ${Math.round(pendingTarget.y / TILE_PX)}`}
+            destLabel={
+              pendingTarget.pickupLetter
+                ? `Message de ${pendingTarget.pickupLetter.authorName || 'Anonyme'}`
+                : `${Math.round(pendingTarget.x / TILE_PX)}, ${Math.round(pendingTarget.y / TILE_PX)}`
+            }
             onCancel={cancelMove}
             onConfirm={confirmMove}
           />
         )}
 
         {/* Bouton Settings */}
-        <TouchableOpacity style={styles.settingsBtn} onPress={openSettings}>
-          <Text style={styles.settingsIcon}>⚙</Text>
+        <TouchableOpacity style={styles.settingsBtn} onPress={openSettings} activeOpacity={0.8}>
+          <Settings size={22} color={THEME.text} strokeWidth={2.2} />
         </TouchableOpacity>
 
         {/* Bouton Lettre */}
         {!moving && !pendingTarget && (
           <TouchableOpacity style={styles.letterBtn} onPress={openLetterWrite} activeOpacity={0.8}>
-            <Animated.View style={[
-              styles.letterBtnHalo,
-              {
-                transform: [{ scale: breathe.interpolate({ inputRange: [0, 1], outputRange: [1, 1.2] }) }],
-                opacity: breathe.interpolate({ inputRange: [0, 1], outputRange: [0.5, 0.2] }),
-              },
-            ]} />
-            <View style={styles.letterBtnInner}>
-              <ScrollText size={28} color="#5a3a1c" strokeWidth={2.2} />
-            </View>
+            <ScrollText size={24} color={THEME.text} strokeWidth={2.2} />
           </TouchableOpacity>
         )}
 
@@ -1045,6 +1141,14 @@ export default function App() {
           <LetterReadModal
             letter={readingLetter}
             onClose={closeReadingLetter}
+          />
+        )}
+        {inventoryOpen && (
+          <InventoryModal
+            items={inventory}
+            onClose={() => setInventoryOpen(false)}
+            onMarkRead={(id) => setInventory((prev) => prev.map((l) => l.id === id ? { ...l, unread: false } : l))}
+            onDelete={(id) => setInventory((prev) => prev.filter((l) => l.id !== id))}
           />
         )}
       </View>
@@ -1111,17 +1215,15 @@ const styles = StyleSheet.create({
 
   recenterBtn: {
     position: 'absolute',
-    bottom: 170,
-    left: '50%',
-    marginLeft: -22,
-    width: 44, height: 44, borderRadius: 22,
-    backgroundColor: 'rgba(255,251,232,0.96)',
-    borderWidth: 1.5, borderColor: '#3a2614',
+    bottom: 156, right: 16,
+    width: 48, height: 48, borderRadius: 24,
+    backgroundColor: THEME.card,
+    borderWidth: 1.5, borderColor: THEME.border,
     justifyContent: 'center', alignItems: 'center',
-    shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 }, elevation: 6,
+    ...THEME.shadow,
+    shadowRadius: 12,
   },
-  iconText: { color: '#3a2614', fontSize: 22, fontWeight: '700' },
+  iconText: { color: THEME.text, fontSize: 22, fontWeight: '700' },
 
   speedBtn: {
     position: 'absolute', bottom: 40, right: 16,
@@ -1136,11 +1238,17 @@ const styles = StyleSheet.create({
   onlineBadge: {
     position: 'absolute', top: TOP_SAFE, left: 16,
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14,
+    backgroundColor: THEME.card,
+    borderWidth: 1.5, borderColor: THEME.border,
+    paddingHorizontal: 10, paddingVertical: 6, borderRadius: THEME.radiusLg,
+    ...THEME.shadow,
+    shadowRadius: 10,
   },
-  onlineDot: { width: 8, height: 8, borderRadius: 4, marginRight: 6 },
-  onlineText: { color: '#fff', fontSize: 12, fontWeight: '600' },
+  onlineDot: {
+    width: 9, height: 9, borderRadius: 4.5, marginRight: 7,
+    borderWidth: 1, borderColor: THEME.border,
+  },
+  onlineText: { color: THEME.text, fontSize: 12, fontWeight: '700' },
 
   previewBar: {
     position: 'absolute', bottom: 110, left: 20, right: 20,
@@ -1166,36 +1274,42 @@ const styles = StyleSheet.create({
   previewBtnText: { fontSize: 15, fontWeight: '700', color: '#1a1a2e' },
 
   settingsBtn: {
-    position: 'absolute', top: TOP_SAFE - 4, right: 16,
-    width: 44, height: 44, borderRadius: 22,
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    position: 'absolute', top: TOP_SAFE, right: 16,
+    width: 48, height: 48, borderRadius: 24,
+    backgroundColor: THEME.card,
+    borderWidth: 1.5, borderColor: THEME.border,
+    justifyContent: 'center', alignItems: 'center',
+    ...THEME.shadow,
+    shadowRadius: 10,
+  },
+  inventoryBtn: {
+    position: 'absolute', top: TOP_SAFE, right: 76,
+    width: 48, height: 48, borderRadius: 24,
+    backgroundColor: THEME.card,
+    borderWidth: 1.5, borderColor: THEME.border,
+    justifyContent: 'center', alignItems: 'center',
+    ...THEME.shadow,
+    shadowRadius: 10,
+  },
+  inventoryBadge: {
+    position: 'absolute', top: -4, right: -4,
+    minWidth: 18, height: 18, borderRadius: 9,
+    backgroundColor: THEME.danger,
+    borderWidth: 1.5, borderColor: THEME.card,
+    paddingHorizontal: 4,
     justifyContent: 'center', alignItems: 'center',
   },
-  customizeBtn: {
-    position: 'absolute', top: TOP_SAFE - 4, right: 70,
-    width: 44, height: 44, borderRadius: 22,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    justifyContent: 'center', alignItems: 'center',
+  inventoryBadgeText: {
+    color: '#fff', fontSize: 10, fontWeight: '800',
   },
-  settingsIcon: { color: '#fff', fontSize: 22 },
 
   letterBtn: {
-    position: 'absolute', bottom: 170, right: 16,
-    width: 60, height: 60,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  letterBtnHalo: {
-    position: 'absolute',
-    width: 60, height: 60, borderRadius: 30,
-    backgroundColor: '#ffd93d',
-  },
-  letterBtnInner: {
+    position: 'absolute', bottom: 90, right: 16,
     width: 48, height: 48, borderRadius: 24,
-    backgroundColor: '#f4e4bc',
-    borderWidth: 2, borderColor: '#a08050',
+    backgroundColor: THEME.card,
+    borderWidth: 1.5, borderColor: THEME.border,
     justifyContent: 'center', alignItems: 'center',
-    shadowColor: '#000', shadowOpacity: 0.25,
-    shadowRadius: 4, shadowOffset: { width: 0, height: 2 },
-    elevation: 4,
+    ...THEME.shadow,
+    shadowRadius: 12,
   },
 });
