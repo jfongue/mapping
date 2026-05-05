@@ -719,7 +719,6 @@ export default function App() {
 
   const startMoveAlongCurve = (samples, length) => {
     if (!samples || samples.length < 2) return;
-    // Durée basée sur la vitesse fixe de constants.js — aucun plafond arbitraire local
     const baseDuration = Math.max(
       MIN_DURATION_MS,
       Math.min(MAX_DURATION_MS, (length / SPEED_PX_PER_SEC) * 1000)
@@ -1014,6 +1013,7 @@ export default function App() {
           </TouchableOpacity>
         )}
 
+        {/* Bouton debug vitesse — bas gauche */}
         {debugEnabled && (
           <TouchableOpacity
             style={[styles.speedBtn, speedMul > 1 && styles.speedBtnActive]}
@@ -1138,10 +1138,11 @@ const styles = StyleSheet.create({
     ...THEME.shadow, shadowRadius: 12,
   },
   iconText: { color: THEME.text, fontSize: 22, fontWeight: '700' },
+  // Bouton debug : bas gauche
   speedBtn: {
-    position: 'absolute', bottom: 40, right: 16,
+    position: 'absolute', bottom: 40, left: 16,
     paddingHorizontal: 16, paddingVertical: 10, borderRadius: 22,
-    backgroundColor: 'rgba(0,0,0,0.7)', minWidth: 70, alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.7)', minWidth: 80, alignItems: 'center',
   },
   speedBtnActive: { backgroundColor: '#ff6b6b' },
   speedText: { color: '#fff', fontSize: 14, fontWeight: '700' },
