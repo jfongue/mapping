@@ -5,22 +5,12 @@
  *
  *   A (haut-gauche) → B (haut-droite) → C (bas-milieu) → A → ...
  *
- * Principe :
- *   1. On définit trois coins A, B, C couvrant la quasi-totalité de la map.
- *   2. Le temps est découpé en cycles de TRIANGLE_CYCLE_MS.
- *      Chaque cycle = un tour complet du triangle A→B→C→A.
- *   3. À partir de `now`, on détermine :
- *        - le segment courant (A→B, B→C ou C→A)
- *        - la position exacte par interpolation linéaire
- *        - durationMs = distance / SPEED_PX_PER_SEC (même logique qu'App.js)
- *   4. Écrit dans Firebase :
- *        /players/botaniste_rebelle = {
- *          id, name, color, outfit, skin, hair, hat,
- *          x, y,
- *          target: { fromX, fromY, toX, toY, startTs, durationMs },
- *          lastSeen (= début du segment + durationMs)
- *        }
- *   5. S'arrête — le client interpole via son Animated.timing.
+ * Au lancement :
+ *   1. Calcule la position exacte sur le triangle à partir de `now`.
+ *   2. Écrit dans Firebase : x, y (position réelle), target (segment
+ *      courant), lastSeen (fin du segment).
+ *   → L'ancienne position est écrasée — reprise fluide immédiate.
+ *   3. S'arrête. Le client interpole via son Animated.timing.
  *
  * Usage : node scripts/botaniste.js
  * Env   : FIREBASE_DB_URL (optionnel)
@@ -42,80 +32,81 @@ const FIREBASE_CONFIG = {
 };
 
 // ─── Constantes map ───────────────────────────────────────────────────────────────────
-const MAP_W       = 40;
-const MAP_H       = 40;
-const TILE_PX     = 50;
-const MAP_W_PX    = MAP_W * TILE_PX;  // 2000 px
-const MAP_H_PX    = MAP_H * TILE_PX;  // 2000 px
+const MAP_W        = 40;
+const MAP_H        = 40;
+const TILE_PX      = 50;
+const MAP_W_PX     = MAP_W * TILE_PX;  // 2000 px
+const MAP_H_PX     = MAP_H * TILE_PX;  // 2000 px
 
 // Vitesse identique à celle des vrais joueurs (voir App.js)
 const SPEED_PX_PER_SEC = 80;
 
 // ─── Triangle ───────────────────────────────────────────────────────────────────────────
-const A = { x: 0.1 * MAP_W_PX, y: 0.1 * MAP_H_PX }; // haut-gauche  (200, 200)
+//
+//  A ──────────────────────── B
+//  ▲                             │
+//  └────────────   C  ───────┘
+//
+const A = { x: 0.1 * MAP_W_PX, y: 0.1 * MAP_H_PX }; // haut-gauche  (200,  200)
 const B = { x: 0.9 * MAP_W_PX, y: 0.1 * MAP_H_PX }; // haut-droite  (1800, 200)
 const C = { x: 0.5 * MAP_W_PX, y: 0.9 * MAP_H_PX }; // bas-milieu   (1000, 1800)
 
-// Distances de chaque côté
-const DIST_AB = Math.hypot(B.x - A.x, B.y - A.y);
-const DIST_BC = Math.hypot(C.x - B.x, C.y - B.y);
-const DIST_CA = Math.hypot(A.x - C.x, A.y - C.y);
+// Distances de chaque côté du triangle
+const DIST_AB    = Math.hypot(B.x - A.x, B.y - A.y);
+const DIST_BC    = Math.hypot(C.x - B.x, C.y - B.y);
+const DIST_CA    = Math.hypot(A.x - C.x, A.y - C.y);
 const DIST_TOTAL = DIST_AB + DIST_BC + DIST_CA;
 
-// Durée d'un cycle complet (1 tour du triangle) en ms
-// Calculé automatiquement à partir de la distance totale et de la vitesse.
+// Durée d'un cycle complet (1 tour du triangle)
 const TRIANGLE_CYCLE_MS = Math.round((DIST_TOTAL / SPEED_PX_PER_SEC) * 1000);
 
-// 3 segments du triangle avec leurs bornes temporelles relatives [0, 1]
+// Fractions temporelles de chaque segment dans le cycle
 const FRAC_AB = DIST_AB / DIST_TOTAL;
 const FRAC_BC = DIST_BC / DIST_TOTAL;
-// FRAC_CA = 1 - FRAC_AB - FRAC_BC
 
 const SEGMENTS = [
-  { from: A, to: B, dist: DIST_AB, fracStart: 0,                   fracEnd: FRAC_AB            },
-  { from: B, to: C, dist: DIST_BC, fracStart: FRAC_AB,             fracEnd: FRAC_AB + FRAC_BC  },
-  { from: C, to: A, dist: DIST_CA, fracStart: FRAC_AB + FRAC_BC,  fracEnd: 1                  },
+  { from: A, to: B, dist: DIST_AB, fracStart: 0,              fracEnd: FRAC_AB             },
+  { from: B, to: C, dist: DIST_BC, fracStart: FRAC_AB,        fracEnd: FRAC_AB + FRAC_BC   },
+  { from: C, to: A, dist: DIST_CA, fracStart: FRAC_AB + FRAC_BC, fracEnd: 1                },
 ];
+
+const SEG_NAMES = ['A → B', 'B → C', 'C → A'];
 
 const BOTANISTE_ID    = 'botaniste_rebelle';
 const BOTANISTE_COLOR = '#5dca8b';
 
-// ─── Calcul déterministe de l'état courant ───────────────────────────────────────
+// ─── Calcul déterministe ────────────────────────────────────────────────────────────────
+/**
+ * Retourne l'état exact de la Botaniste à l'instant `now` :
+ *   - x, y          : position interpolée sur le segment courant
+ *   - seg           : segment courant ({ from, to, dist, fracStart, fracEnd })
+ *   - target        : { fromX, fromY, toX, toY, startTs, durationMs }
+ *   - lastSeen      : fin du segment (pour rester online tout le trajet)
+ */
 function computeState(now) {
-  // Phase dans le cycle courant [0, 1)
-  const cycleStart = Math.floor(now / TRIANGLE_CYCLE_MS) * TRIANGLE_CYCLE_MS;
-  const phase      = (now - cycleStart) / TRIANGLE_CYCLE_MS;
+  const cycleStart  = Math.floor(now / TRIANGLE_CYCLE_MS) * TRIANGLE_CYCLE_MS;
+  const phase       = (now - cycleStart) / TRIANGLE_CYCLE_MS; // [0, 1)
 
-  // Trouver le segment courant
   const seg = SEGMENTS.find((s) => phase < s.fracEnd) || SEGMENTS[SEGMENTS.length - 1];
 
-  // Fraction dans le segment courant [0, 1]
   const fracInSeg  = (phase - seg.fracStart) / (seg.fracEnd - seg.fracStart);
+  const x          = seg.from.x + (seg.to.x - seg.from.x) * fracInSeg;
+  const y          = seg.from.y + (seg.to.y - seg.from.y) * fracInSeg;
 
-  // Position interpolée
-  const x = seg.from.x + (seg.to.x - seg.from.x) * fracInSeg;
-  const y = seg.from.y + (seg.to.y - seg.from.y) * fracInSeg;
-
-  // Timestamps du segment courant
   const segStartTs = cycleStart + seg.fracStart * TRIANGLE_CYCLE_MS;
   const durationMs = Math.round((seg.dist / SPEED_PX_PER_SEC) * 1000);
 
   return {
-    x, y,
-    seg,
+    x, y, seg,
     target: {
       fromX: seg.from.x, fromY: seg.from.y,
       toX:   seg.to.x,   toY:   seg.to.y,
       startTs:    segStartTs,
       durationMs,
     },
-    // lastSeen = fin du segment → elle reste online tout le trajet
     lastSeen: segStartTs + durationMs,
   };
 }
-
-// ─── Noms lisibles pour les segments (pour les logs) ──────────────────────────
-const SEG_NAMES = ['A → B', 'B → C', 'C → A'];
 
 // ─── Main ──────────────────────────────────────────────────────────────────
 async function main() {
@@ -124,7 +115,7 @@ async function main() {
   const segIdx = SEGMENTS.indexOf(state.seg);
   const remain = Math.max(0, state.lastSeen - now);
 
-  console.log('🌿 La Botaniste Rebelle');
+  console.log('🌿 La Botaniste Rebelle — RESET');
   console.log(`   cycle     : ${(TRIANGLE_CYCLE_MS / 1000).toFixed(0)} s total`);
   console.log(`   segment   : ${SEG_NAMES[segIdx]}  (${state.seg.dist.toFixed(0)} px • ${(state.target.durationMs / 1000).toFixed(1)} s)`);
   console.log(`   position  : (${state.x.toFixed(1)}, ${state.y.toFixed(1)})`);
@@ -134,6 +125,10 @@ async function main() {
   const app = initializeApp(FIREBASE_CONFIG);
   const db  = getDatabase(app);
 
+  // RESET + reprise : on écrase toute l'ancienne position en une seule opération.
+  // x / y     = position exacte sur le triangle à cet instant
+  // target    = segment en cours avec startTs correct → le client anime depuis ce point
+  // lastSeen  = fin du segment → elle reste "online" pendant tout le trajet
   await update(ref(db, `players/${BOTANISTE_ID}`), {
     id:       BOTANISTE_ID,
     name:     'La Botaniste Rebelle',
@@ -148,7 +143,7 @@ async function main() {
     lastSeen: state.lastSeen,
   });
 
-  console.log('✅ Firebase mis à jour.');
+  console.log('✅ Position réinitialisée et Firebase mis à jour.');
   await deleteApp(app);
 }
 
