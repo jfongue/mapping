@@ -25,7 +25,8 @@ export const MAX_SCALE = 2.5;
 // === Multi ===
 export const ONLINE_THRESHOLD_MS = 30 * 1000;
 export const TAP_PLAYER_RADIUS = 30;
-export const SPEED_LEVELS = [1, 2, 4, 8, 15, 30];
+// Niveaux de boost debug : x1 (normal) → x100
+export const SPEED_LEVELS = [1, 2, 5, 10, 20, 50, 100];
 
 // === Layout ===
 export const TOP_SAFE =
