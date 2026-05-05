@@ -588,40 +588,47 @@ export default function App() {
     { useNativeDriver: true }
   );
 
-  // Snapshot du point map sous le centre écran au début du pinch, pour
-  // recoller la caméra à la fin et que le zoom paraisse pivoter autour
-  // du centre écran (et pas du centre de la map qui est très loin).
-  const pinchAnchor = useRef({ mapX: 0, mapY: 0 });
+  // Snapshot du point map sous le focal point (centre entre les 2 doigts) au début du pinch,
+  // pour recoller la caméra à la fin et que le zoom paraisse pivoter autour de ce point.
+  const pinchAnchor = useRef({ mapX: 0, mapY: 0, focalX: 0, focalY: 0 });
 
   const onPinchStateChange = (e) => {
-    const { state } = e.nativeEvent;
+    const { state, scale: gestureScale, focalX, focalY } = e.nativeEvent;
+
     if (state === State.BEGAN) {
       markUserHasPanned();
-      const vw = viewport.w || SCREEN_W;
-      const vh = viewport.h || SCREEN_H;
+      // Sauvegarde le scale courant au début du geste pour éviter l'accumulation
+      // d'erreur avec gestureScale (qui repart de 1 à chaque nouveau BEGAN).
+      pinchStartScale.current = lastScale.current;
+
       const s = lastScale.current;
       const cx = MAP_W_PX / 2;
       const cy = MAP_H_PX / 2;
-      // Inversion de computeCenteredOffset : map coord du point écran vw/2, vh/2
+      // Utilise le point focal réel (centre entre les 2 doigts) plutôt que le centre écran.
+      const focX = focalX ?? (viewport.w || SCREEN_W) / 2;
+      const focY = focalY ?? (viewport.h || SCREEN_H) / 2;
       pinchAnchor.current = {
-        mapX: (vw / 2 - lastOffset.current.x - cx * (1 - s)) / s,
-        mapY: (vh / 2 - lastOffset.current.y - cy * (1 - s)) / s,
+        mapX: (focX - lastOffset.current.x - cx * (1 - s)) / s,
+        mapY: (focY - lastOffset.current.y - cy * (1 - s)) / s,
+        focalX: focX,
+        focalY: focY,
       };
     }
+
     if (state === State.END || state === State.CANCELLED) {
-      let next = lastScale.current * e.nativeEvent.scale;
+      let next = pinchStartScale.current * gestureScale;
       next = Math.max(MIN_SCALE, Math.min(MAX_SCALE, next));
       lastScale.current = next;
       baseScale.setValue(next);
       pinchScale.setValue(1);
 
-      // Recale tx/ty pour que le point map snapshotté reste au centre écran
-      const vw = viewport.w || SCREEN_W;
-      const vh = viewport.h || SCREEN_H;
       const cx = MAP_W_PX / 2;
       const cy = MAP_H_PX / 2;
-      const newTx = vw / 2 - cx * (1 - next) - pinchAnchor.current.mapX * next;
-      const newTy = vh / 2 - cy * (1 - next) - pinchAnchor.current.mapY * next;
+      // Recale sur le focal point capturé au BEGAN (cohérence pivot BEGAN → END)
+      const focX = pinchAnchor.current.focalX;
+      const focY = pinchAnchor.current.focalY;
+      const newTx = focX - cx * (1 - next) - pinchAnchor.current.mapX * next;
+      const newTy = focY - cy * (1 - next) - pinchAnchor.current.mapY * next;
       lastOffset.current = { x: newTx, y: newTy };
       tx.setValue(newTx);
       ty.setValue(newTy);
