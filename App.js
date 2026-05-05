@@ -28,19 +28,51 @@ import {
 import { THEME } from './src/theme';
 
 const INVENTORY_KEY = '@treasureProto.inventory.v1';
-// Distance max (px) entre un pendingTarget et un message pour déclencher le ramassage auto.
 const LETTER_PICKUP_RADIUS = 130;
-// Distance max (px) entre un pendingTarget et un autre joueur pour libeller la preview "Voyage vers {nom}".
 const PLAYER_NEAR_RADIUS = 130;
-// Tolérance (px écran) en-dessous de laquelle le perso est considéré "centré" → bouton recenter caché.
 const RECENTER_HIDE_RADIUS = 90;
-import { TILES_DATA, MAP_W, MAP_H, TILE_PX, findPath } from './src/tilemap';
+
+import { TILES_DATA, MAP_W, MAP_H, TILE_PX, WALKABLE, findPath } from './src/tilemap';
 import { sampleAt } from './src/smoothing';
 import TileLayer, { MAP_W_PX, MAP_H_PX } from './components/TileLayer';
 import DottedTrail from './components/DottedTrail';
 
-// Construit waypoints + longueur totale à partir d'un cellPath, sans aucun lissage.
-// Ligne droite tile-à-tile : O(n), pas de Catmull-Rom, pas d'oversampling.
+// Couleur eau (doit correspondre à TILE_COLORS[0] dans tilemap.js)
+const WATER_COLOR = '#bce0e8';
+
+// Trouve la case walkable la plus proche d'une position pixel.
+// Retourne { x, y } en pixels (centre de tile), ou SPAWN si rien trouvé.
+function safePixelPos(px, py) {
+  const tx = Math.floor(px / TILE_PX);
+  const ty = Math.floor(py / TILE_PX);
+  const tileIdx = ty * MAP_W + tx;
+  // Déjà safe ?
+  if (
+    tx >= 0 && tx < MAP_W && ty >= 0 && ty < MAP_H &&
+    WALKABLE[TILES_DATA[tileIdx]]
+  ) {
+    return { x: px, y: py };
+  }
+  // Recherche en spirale
+  for (let r = 1; r <= 20; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const nx = tx + dx, ny = ty + dy;
+        if (nx < 0 || nx >= MAP_W || ny < 0 || ny >= MAP_H) continue;
+        if (WALKABLE[TILES_DATA[ny * MAP_W + nx]]) {
+          return {
+            x: nx * TILE_PX + TILE_PX / 2,
+            y: ny * TILE_PX + TILE_PX / 2,
+          };
+        }
+      }
+    }
+  }
+  // Fallback : spawn central
+  return { x: (MAP_W / 2) * TILE_PX, y: (MAP_H / 2) * TILE_PX };
+}
+
 function buildStraightPath(cellPath, startPx) {
   const wps = cellPath.map((c) => ({
     x: c.x * TILE_PX + TILE_PX / 2,
@@ -78,36 +110,25 @@ const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 const INIT_X = SCREEN_W / 2 - MAP_SIZE / 2;
 const INIT_Y = SCREEN_H / 2 - MAP_SIZE / 2;
 
-// Seuil en pixels en-dessous duquel on ne considère pas que l'user a pané
 const PAN_THRESHOLD_PX = 5;
 
 export default function App() {
-  // ===== Viewport =====
   const [viewport, setViewport] = useState({ w: SCREEN_W, h: SCREEN_H });
 
-  // ===== Pan caméra (offset pattern : pas de flicker à la fin du geste) =====
   const tx = useRef(new Animated.Value(INIT_X)).current;
   const ty = useRef(new Animated.Value(INIT_Y)).current;
   const lastOffset = useRef({ x: INIT_X, y: INIT_Y });
 
-  // ===== Zoom =====
-  // baseScale est la seule valeur qui pilote le scale visuel.
-  // pinchScale n'est conservé QUE pour recevoir les events natifs du PinchGestureHandler
-  // (Animated.event exige une Animated.Value cible), mais il n'est PAS dans le transform.
-  // Le listener JS lit pinchScale et met à jour baseScale + tx/ty de façon synchrone,
-  // ce qui évite tout conflit native thread / JS thread.
   const baseScale = useRef(new Animated.Value(1)).current;
-  const pinchScale = useRef(new Animated.Value(1)).current; // réceptacle events natifs uniquement
+  const pinchScale = useRef(new Animated.Value(1)).current;
   const lastScale = useRef(1);
   const pinchStartScale = useRef(1);
 
-  // ===== Recenter — nouvelle logique =====
   const userHasPanned = useRef(false);
   const [showRecenterBtn, setShowRecenterBtn] = useState(false);
   const followRafId = useRef(null);
   const isInitialCenter = useRef(false);
 
-  // ===== Perso =====
   const [pos, setPos] = useState(SPAWN);
   const [moving, setMoving] = useState(false);
   const [target, setTarget] = useState(null);
@@ -119,17 +140,14 @@ export default function App() {
   const moveTarget = useRef(null);
   const moveBaseDuration = useRef(0);
 
-  // ===== Animations =====
   const bounce = useRef(new Animated.Value(0)).current;
   const breathe = useRef(new Animated.Value(0)).current;
 
-  // ===== Speed debug =====
   const [speedLvl, setSpeedLvl] = useState(0);
   const [debugEnabled, setDebugEnabled] = useState(false);
   const speedMul = SPEED_LEVELS[speedLvl];
   const speedTimer = useRef(null);
 
-  // ===== Multi =====
   const [profile, setProfile] = useState(null);
   const [otherPlayers, setOtherPlayers] = useState([]);
   const [selectedPlayer, setSelectedPlayer] = useState(null);
@@ -137,39 +155,31 @@ export default function App() {
   const [draftName, setDraftName] = useState('');
   const playerAnims = useRef(new Map()).current;
 
-  // ===== Preview déplacement =====
   const [pendingTarget, setPendingTarget] = useState(null);
 
-  // ===== Letters =====
   const [letters, setLetters] = useState([]);
   const [letterWriteOpen, setLetterWriteOpen] = useState(false);
   const [letterDraft, setLetterDraft] = useState('');
   const [readingLetter, setReadingLetter] = useState(null);
 
-  // ===== Inventaire =====
   const [inventory, setInventory] = useState([]);
   const [inventoryLoaded, setInventoryLoaded] = useState(false);
   const [inventoryOpen, setInventoryOpen] = useState(false);
   const unreadCount = inventory.filter((l) => l.unread).length;
 
-  // ===== Path en cours =====
   const activePathRef = useRef(null);
   const [frozenActivePath, setFrozenActivePath] = useState(null);
   const [consumedDist, setConsumedDist] = useState(0);
   const lastConsumedTick = useRef(0);
 
-  // ===== Tick global online check =====
   const globalNowRef = useRef(Date.now());
 
-  // ===== Animated values pour les gestes =====
   const dx = useRef(new Animated.Value(0)).current;
   const dy = useRef(new Animated.Value(0)).current;
 
-  // Transform composés — baseScale seul pour le scale (pas de multiply avec pinchScale)
   const totalX = Animated.add(tx, dx);
   const totalY = Animated.add(ty, dy);
 
-  // Listener id pour la compensation live du pivot pinch
   const pinchListenerId = useRef(null);
 
   // === HELPERS RECENTER ===
@@ -227,7 +237,7 @@ export default function App() {
 
   // === EFFECTS ===
 
-  // Charge save pos
+  // Charge save pos — téléporte sur case safe si zone interdite
   useEffect(() => {
     (async () => {
       try {
@@ -235,9 +245,10 @@ export default function App() {
         if (raw) {
           const data = JSON.parse(raw);
           if (data?.pos) {
-            setPos(data.pos);
-            animX.setValue(data.pos.x);
-            animY.setValue(data.pos.y);
+            const safe = safePixelPos(data.pos.x, data.pos.y);
+            setPos(safe);
+            animX.setValue(safe.x);
+            animY.setValue(safe.y);
           }
         }
       } catch (e) {}
@@ -442,7 +453,7 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  // Polling : affiche le bouton recenter uniquement si le perso est loin du centre écran.
+  // Polling recenter button
   useEffect(() => {
     const id = setInterval(() => {
       const vw = viewport.w || SCREEN_W;
@@ -494,7 +505,7 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
-  // Centrage initial sur le perso (une seule fois, après chargement)
+  // Centrage initial
   useEffect(() => {
     if (isInitialCenter.current || !loaded || viewport.w === 0) return;
     const s = lastScale.current;
@@ -529,7 +540,6 @@ export default function App() {
     startMoveAlongCurve(newSamples, length);
   }, [speedMul]);
 
-  // Cleanup speedTimer au unmount
   useEffect(() => {
     return () => { if (speedTimer.current) clearTimeout(speedTimer.current); };
   }, []);
@@ -543,14 +553,10 @@ export default function App() {
 
   const onPanStateChange = (e) => {
     const { state, translationX, translationY } = e.nativeEvent;
-
     if (state === State.ACTIVE || state === State.END || state === State.CANCELLED) {
       const dist = Math.sqrt(translationX * translationX + translationY * translationY);
-      if (dist >= PAN_THRESHOLD_PX) {
-        markUserHasPanned();
-      }
+      if (dist >= PAN_THRESHOLD_PX) markUserHasPanned();
     }
-
     if (state === State.END || state === State.CANCELLED) {
       lastOffset.current = {
         x: lastOffset.current.x + translationX,
@@ -563,44 +569,30 @@ export default function App() {
     }
   };
 
-  // onPinchGesture : Animated.event envoie les valeurs natives vers pinchScale,
-  // mais pinchScale N'EST PAS dans le transform. Un listener JS lit pinchScale
-  // et met à jour baseScale + tx/ty de façon synchrone sur le JS thread.
-  // Ainsi il n'y a qu'un seul pilote pour le transform → zéro flicker.
   const onPinchGesture = Animated.event(
     [{ nativeEvent: { scale: pinchScale } }],
     { useNativeDriver: true }
   );
 
-  // Snapshot du point map sous le focal point au début du pinch.
   const pinchAnchor = useRef({ mapX: 0, mapY: 0, focalX: 0, focalY: 0 });
 
   const onPinchStateChange = (e) => {
     const { state, scale: gestureScale, focalX, focalY } = e.nativeEvent;
-
     if (state === State.BEGAN) {
       markUserHasPanned();
       pinchStartScale.current = lastScale.current;
-
       const s = lastScale.current;
       const cx = MAP_W_PX / 2;
       const cy = MAP_H_PX / 2;
       const focX = focalX ?? (viewport.w || SCREEN_W) / 2;
       const focY = focalY ?? (viewport.h || SCREEN_H) / 2;
-
-      // Point de la map sous le focal point
       pinchAnchor.current = {
         mapX: (focX - lastOffset.current.x - cx * (1 - s)) / s,
         mapY: (focY - lastOffset.current.y - cy * (1 - s)) / s,
         focalX: focX,
         focalY: focY,
       };
-
-      // Listener JS : à chaque tick natif, on recalcule baseScale + tx/ty.
-      // baseScale est la SEULE valeur dans le transform → pas de conflit de thread.
-      if (pinchListenerId.current !== null) {
-        pinchScale.removeListener(pinchListenerId.current);
-      }
+      if (pinchListenerId.current !== null) pinchScale.removeListener(pinchListenerId.current);
       pinchListenerId.current = pinchScale.addListener(({ value: liveGestureScale }) => {
         const liveScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, pinchStartScale.current * liveGestureScale));
         const cx2 = MAP_W_PX / 2;
@@ -608,32 +600,21 @@ export default function App() {
         const { mapX, mapY, focalX: fX, focalY: fY } = pinchAnchor.current;
         const newTx = fX - cx2 * (1 - liveScale) - mapX * liveScale;
         const newTy = fY - cy2 * (1 - liveScale) - mapY * liveScale;
-        // Mise à jour synchrone de baseScale et de l'offset
         baseScale.setValue(liveScale);
         tx.setValue(newTx);
         ty.setValue(newTy);
         lastOffset.current = { x: newTx, y: newTy };
       });
     }
-
     if (state === State.END || state === State.CANCELLED) {
-      // Retire le listener live
       if (pinchListenerId.current !== null) {
         pinchScale.removeListener(pinchListenerId.current);
         pinchListenerId.current = null;
       }
-
-      // Finalise le scale avec la valeur exacte du geste
       let next = pinchStartScale.current * gestureScale;
       next = Math.max(MIN_SCALE, Math.min(MAX_SCALE, next));
       lastScale.current = next;
-
-      // Remet pinchScale à 1 pour le prochain geste (il n'est pas dans le transform)
       pinchScale.setValue(1);
-
-      // baseScale et lastOffset ont déjà été mis à jour en live — on s'assure juste
-      // que baseScale reflète la valeur finale clampée (le listener a pu recevoir
-      // une valeur légèrement différente de gestureScale à cause du clamping).
       baseScale.setValue(next);
       tx.setValue(lastOffset.current.x);
       ty.setValue(lastOffset.current.y);
@@ -699,15 +680,12 @@ export default function App() {
     }
     const nearLetter = findLetterNearPoint(t.x, t.y, 40);
     let goalX = t.x, goalY = t.y;
-    if (nearLetter) {
-      goalX = nearLetter.x;
-      goalY = nearLetter.y;
-    }
+    if (nearLetter) { goalX = nearLetter.x; goalY = nearLetter.y; }
     const sx = Math.floor(pos.x / TILE_PX);
     const sy = Math.floor(pos.y / TILE_PX);
-    const tx = Math.floor(goalX / TILE_PX);
-    const ty = Math.floor(goalY / TILE_PX);
-    const cellPath = findPath(TILES_DATA, MAP_W, MAP_H, sx, sy, tx, ty);
+    const tx2 = Math.floor(goalX / TILE_PX);
+    const ty2 = Math.floor(goalY / TILE_PX);
+    const cellPath = findPath(TILES_DATA, MAP_W, MAP_H, sx, sy, tx2, ty2);
     if (!cellPath) return;
     const { samples, length } = buildStraightPath(cellPath, pos);
     const finalPx = samples[samples.length - 1];
@@ -720,11 +698,7 @@ export default function App() {
     });
   };
 
-  // === Letters handlers ===
-  const openLetterWrite = () => {
-    setLetterDraft('');
-    setLetterWriteOpen(true);
-  };
+  const openLetterWrite = () => { setLetterDraft(''); setLetterWriteOpen(true); };
 
   const sendLetter = async () => {
     const text = (letterDraft || '').trim();
@@ -733,23 +707,16 @@ export default function App() {
     setLetterDraft('');
     try {
       await dropLetter({
-        authorId: profile.id,
-        authorName: profile.name,
-        authorColor: profile.color,
-        x: pos.x, y: pos.y,
-        text,
+        authorId: profile.id, authorName: profile.name, authorColor: profile.color,
+        x: pos.x, y: pos.y, text,
       });
-    } catch (e) {
-      console.warn('drop letter failed', e);
-    }
+    } catch (e) { console.warn('drop letter failed', e); }
   };
 
   const closeReadingLetter = async () => {
     const l = readingLetter;
     setReadingLetter(null);
-    if (l?.id) {
-      try { await consumeLetter(l.id); } catch (e) {}
-    }
+    if (l?.id) { try { await consumeLetter(l.id); } catch (e) {} }
   };
 
   const pendingPickupRef = useRef(null);
@@ -793,14 +760,12 @@ export default function App() {
     setEta(Date.now() + dur);
     setConsumedDist(0);
     lastConsumedTick.current = 0;
-
     announceMove({
       from: { x: pos.x, y: pos.y },
       to: samples[samples.length - 1],
       startTs: Date.now(),
       durationMs: dur,
     });
-
     const progress = new Animated.Value(0);
     progressRef.current = progress;
     const DOT_TICK = 26;
@@ -813,12 +778,8 @@ export default function App() {
         setConsumedDist(value);
       }
     });
-
     const anim = Animated.timing(progress, {
-      toValue: length,
-      duration: dur,
-      easing: Easing.linear,
-      useNativeDriver: false,
+      toValue: length, duration: dur, easing: Easing.linear, useNativeDriver: false,
     });
     currentAnim.current = anim;
     anim.start(({ finished }) => {
@@ -845,7 +806,6 @@ export default function App() {
     lastConsumedTick.current = 0;
     currentAnim.current = null;
     moveTarget.current = null;
-
     const pickup = pendingPickupRef.current;
     pendingPickupRef.current = null;
     if (pickup && pickup.id) {
@@ -856,13 +816,9 @@ export default function App() {
           return [
             ...prev,
             {
-              id: pickup.id,
-              authorId: pickup.authorId,
-              authorName: pickup.authorName,
-              authorColor: pickup.authorColor,
-              text: pickup.text,
-              pickedAt: Date.now(),
-              unread: true,
+              id: pickup.id, authorId: pickup.authorId,
+              authorName: pickup.authorName, authorColor: pickup.authorColor,
+              text: pickup.text, pickedAt: Date.now(), unread: true,
             },
           ];
         });
@@ -877,10 +833,7 @@ export default function App() {
     moveBaseDuration.current = baseDurationMs;
     setMoving(true);
     const dur = baseDurationMs / speedMul;
-    announceMove({
-      from: { x: pos.x, y: pos.y }, to: t,
-      startTs: Date.now(), durationMs: dur,
-    });
+    announceMove({ from: { x: pos.x, y: pos.y }, to: t, startTs: Date.now(), durationMs: dur });
     runMoveAnim(dur);
   };
 
@@ -912,18 +865,14 @@ export default function App() {
     const s = lastScale.current;
     const charX = animX.__getValue();
     const charY = animY.__getValue();
-
     const curOffX = lastOffset.current.x + dx.__getValue();
     const curOffY = lastOffset.current.y + dy.__getValue();
-
     const { x: targetX, y: targetY } = computeCenteredOffset(charX, charY, vw, vh, s);
-
     lastOffset.current = { x: curOffX, y: curOffY };
     dx.setValue(0);
     dy.setValue(0);
     tx.setValue(curOffX);
     ty.setValue(curOffY);
-
     Animated.parallel([
       Animated.timing(tx, { toValue: targetX, duration: 350, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
       Animated.timing(ty, { toValue: targetY, duration: 350, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
@@ -950,12 +899,7 @@ export default function App() {
     setSpeedLvl(0);
   };
 
-  // === Profile ===
-
-  const openSettings = () => {
-    setDraftName(profile?.name || '');
-    setSettingsOpen(true);
-  };
+  const openSettings = () => { setDraftName(profile?.name || ''); setSettingsOpen(true); };
 
   const saveProfile = (patch) => {
     const updated = { ...profile, ...patch };
@@ -975,7 +919,6 @@ export default function App() {
     saveProfile({ debug: next });
   };
 
-  // === Stats preview ===
   const previewStats = pendingTarget ? (() => {
     const length = pendingTarget.length || 0;
     let durMs = (length / SPEED_PX_PER_SEC) * 1000;
@@ -998,93 +941,51 @@ export default function App() {
                 }]}>
                   <TouchableWithoutFeedback onPress={handleTap}>
                     <View style={StyleSheet.absoluteFill}>
-                      {/* Tilemap */}
                       <TileLayer />
-
-                      {/* Preview : trail pointillé léger (Views natives) */}
                       {pendingTarget && (
-                        <DottedTrail
-                          samples={pendingTarget.samples}
-                          color="#3a7ea8" spacing={26} size={6} opacity={0.95}
-                        />
+                        <DottedTrail samples={pendingTarget.samples} color="#3a7ea8" spacing={26} size={6} opacity={0.95} />
                       )}
-
-                      {/* Chemin actif figé */}
                       {frozenActivePath && (
-                        <DottedTrail
-                          samples={frozenActivePath}
-                          color="#3a7ea8" spacing={30} size={5} opacity={0.55}
-                          minDist={consumedDist + 40}
-                        />
+                        <DottedTrail samples={frozenActivePath} color="#3a7ea8" spacing={30} size={5} opacity={0.55} minDist={consumedDist + 40} />
                       )}
-
-                      {/* Lettres déposées */}
                       {letters.map((l) => {
                         const isMine = profile && l.authorId === profile.id;
                         const distToMe = Math.hypot(l.x - pos.x, l.y - pos.y);
                         const readable = !isMine && distToMe <= 80;
-                        const iconColor = isMine
-                          ? '#666'
-                          : (readable ? (l.authorColor || '#8b4513') : '#888');
+                        const iconColor = isMine ? '#666' : (readable ? (l.authorColor || '#8b4513') : '#888');
                         return (
-                          <View
-                            key={l.id}
-                            pointerEvents="none"
-                            style={{ position: 'absolute', left: l.x - 16, top: l.y - 16 }}
-                          >
+                          <View key={l.id} pointerEvents="none" style={{ position: 'absolute', left: l.x - 16, top: l.y - 16 }}>
                             {readable && (
                               <View style={{
                                 position: 'absolute', left: -6, top: -6,
                                 width: 44, height: 44, borderRadius: 22,
-                                backgroundColor: l.authorColor || '#ffd93d',
-                                opacity: 0.25,
+                                backgroundColor: l.authorColor || '#ffd93d', opacity: 0.25,
                               }} />
                             )}
                             <ScrollText size={32} color={iconColor} strokeWidth={2.2} />
                           </View>
                         );
                       })}
-
-                      {/* Marqueur destination en cours */}
                       {target && (
                         <View style={[styles.targetMarker, { left: target.x - 14, top: target.y - 14 }]}>
                           <View style={styles.targetInner} />
                         </View>
                       )}
-
-                      {/* Marqueur destination preview */}
                       {pendingTarget && (
                         <>
                           <View style={[styles.previewTargetOuter, { left: pendingTarget.x - 18, top: pendingTarget.y - 18 }]} />
                           <View style={[styles.previewTargetInner, { left: pendingTarget.x - 6, top: pendingTarget.y - 6 }]} />
                         </>
                       )}
-
-                      {/* Autres joueurs */}
                       {otherPlayers.map((p) => {
                         const e = playerAnims.get(p.id);
                         if (!e) return null;
                         const isMoving = !!p.target;
                         const online = isOnline(p);
-                        const dotTransform = [
-                          { translateX: Animated.subtract(e.x, 12) },
-                          { translateY: Animated.subtract(e.y, 12) },
-                        ];
-                        if (isMoving) {
-                          dotTransform.push(
-                            { translateY: Animated.multiply(bounce, -7) },
-                            { scaleX: bounce.interpolate({ inputRange: [0, 1], outputRange: [1, 1.1] }) },
-                            { scaleY: bounce.interpolate({ inputRange: [0, 1], outputRange: [1, 0.92] }) },
-                          );
-                        } else if (!online) {
-                          const s = breathe.interpolate({ inputRange: [0, 1], outputRange: [0.95, 1.05] });
-                          dotTransform.push({ scaleX: s }, { scaleY: s });
-                        }
                         return (
                           <View key={p.id} style={StyleSheet.absoluteFill} pointerEvents="none">
                             <Animated.View style={{
-                              position: 'absolute',
-                              width: 50, height: 50,
+                              position: 'absolute', width: 50, height: 50,
                               transform: [
                                 { translateX: Animated.subtract(e.x, 25) },
                                 { translateY: Animated.subtract(e.y, 25) },
@@ -1099,35 +1000,21 @@ export default function App() {
                                 ] : []),
                               ],
                             }}>
-                              <AdventurerSprite
-                                size={50} viewBoxScale={1.2}
-                                dir="down" moving={isMoving}
-                                outfit={p.outfit || 'gray'}
-                                skin={p.skin || 'light'}
-                                hair={p.hair || 'brown'}
-                                hat={p.hat || 'none'}
-                              />
+                              <AdventurerSprite size={50} viewBoxScale={1.2} dir="down" moving={isMoving}
+                                outfit={p.outfit||'gray'} skin={p.skin||'light'} hair={p.hair||'brown'} hat={p.hat||'none'} />
                             </Animated.View>
                             {!online && <SleepyZzz x={e.x} y={e.y} />}
-                            <Animated.Text
-                              numberOfLines={2}
-                              style={[styles.otherPlayerLabel, {
-                                transform: [
-                                  { translateX: Animated.subtract(e.x, 60) },
-                                  { translateY: Animated.add(e.y, 22) },
-                                ],
-                              }]}
-                            >
-                              {p.name}
-                            </Animated.Text>
+                            <Animated.Text numberOfLines={2} style={[styles.otherPlayerLabel, {
+                              transform: [
+                                { translateX: Animated.subtract(e.x, 60) },
+                                { translateY: Animated.add(e.y, 22) },
+                              ],
+                            }]}>{p.name}</Animated.Text>
                           </View>
                         );
                       })}
-
-                      {/* Perso */}
                       <Animated.View style={{
-                        position: 'absolute',
-                        width: 50, height: 50,
+                        position: 'absolute', width: 50, height: 50,
                         transform: [
                           { translateX: Animated.subtract(animX, 25) },
                           { translateY: Animated.subtract(Animated.subtract(animY, 25), Animated.multiply(bounce, 6)) },
@@ -1135,14 +1022,9 @@ export default function App() {
                           { scaleY: bounce.interpolate({ inputRange: [0, 1], outputRange: [1, 0.94] }) },
                         ],
                       }}>
-                        <AdventurerSprite
-                          size={50} viewBoxScale={1.2}
-                          dir="down" moving={moving}
-                          outfit={profile?.outfit || 'red'}
-                          skin={profile?.skin || 'light'}
-                          hair={profile?.hair || 'brown'}
-                          hat={profile?.hat || 'none'}
-                        />
+                        <AdventurerSprite size={50} viewBoxScale={1.2} dir="down" moving={moving}
+                          outfit={profile?.outfit||'red'} skin={profile?.skin||'light'}
+                          hair={profile?.hair||'brown'} hat={profile?.hat||'none'} />
                       </Animated.View>
                     </View>
                   </TouchableWithoutFeedback>
@@ -1152,73 +1034,52 @@ export default function App() {
           </Animated.View>
         </PinchGestureHandler>
 
-        {/* TravelingBar pendant déplacement */}
-        {moving && (
-          <TravelingBar eta={eta} onStop={stopMove} />
-        )}
+        {moving && <TravelingBar eta={eta} onStop={stopMove} />}
 
-        {/* Bouton recenter */}
         {showRecenterBtn && (
           <TouchableOpacity style={styles.recenterBtn} onPress={recenter} activeOpacity={0.75}>
             <Crosshair size={22} color={THEME.text} strokeWidth={2.2} />
           </TouchableOpacity>
         )}
 
-        {/* Bouton speed (debug only) */}
         {debugEnabled && (
           <TouchableOpacity
             style={[styles.speedBtn, speedMul > 1 && styles.speedBtnActive]}
-            onPressIn={onSpeedPressIn}
-            onPressOut={onSpeedPressOut}
-            activeOpacity={0.8}
+            onPressIn={onSpeedPressIn} onPressOut={onSpeedPressOut} activeOpacity={0.8}
           >
             <Text style={styles.speedText}>⏩ {speedMul}×</Text>
           </TouchableOpacity>
         )}
 
-        {/* Flèches de bord */}
         {viewport.w > 0 && otherPlayers.map((p) => {
           const e = playerAnims.get(p.id);
           if (!e) return null;
           return (
-            <SmoothEdgeArrow
-              key={`arr-${p.id}`}
-              color={p.color}
-              playerX={e.x} playerY={e.y}
-              camX={totalX} camY={totalY}
-              scaleVal={baseScale}
-              W={viewport.w} H={viewport.h}
-            />
+            <SmoothEdgeArrow key={`arr-${p.id}`} color={p.color}
+              playerX={e.x} playerY={e.y} camX={totalX} camY={totalY}
+              scaleVal={baseScale} W={viewport.w} H={viewport.h} />
           );
         })}
 
-        {/* Indicateur online */}
         {profile && (
           <View style={styles.onlineBadge} pointerEvents="none">
             <View style={[styles.onlineDot, { backgroundColor: profile.color }]} />
-            <Text style={styles.onlineText}>
-              {profile.name} · {otherPlayers.filter(isOnline).length} en ligne
-            </Text>
+            <Text style={styles.onlineText}>{profile.name} · {otherPlayers.filter(isOnline).length} en ligne</Text>
           </View>
         )}
 
-        {/* Bouton Inventaire */}
         <TouchableOpacity style={styles.inventoryBtn} onPress={() => setInventoryOpen(true)} activeOpacity={0.8}>
           <Backpack size={22} color={THEME.text} strokeWidth={2.2} />
           {unreadCount > 0 && (
             <View style={styles.inventoryBadge}>
-              <Text style={styles.inventoryBadgeText}>
-                {unreadCount > 9 ? '9+' : unreadCount}
-              </Text>
+              <Text style={styles.inventoryBadgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
             </View>
           )}
         </TouchableOpacity>
 
-        {/* ConfirmationBar avant déplacement */}
         {pendingTarget && previewStats && (
           <ConfirmationBar
-            distancePx={previewStats.dist}
-            durationSec={previewStats.durSec}
+            distancePx={previewStats.dist} durationSec={previewStats.durSec}
             destLabel={
               pendingTarget.pickupLetter
                 ? `Message de ${pendingTarget.pickupLetter.authorName || 'Anonyme'}`
@@ -1226,63 +1087,35 @@ export default function App() {
                   ? (pendingTarget.nearPlayer.name || 'Inconnu')
                   : `${Math.round(pendingTarget.x / TILE_PX)}, ${Math.round(pendingTarget.y / TILE_PX)}`
             }
-            onCancel={cancelMove}
-            onConfirm={confirmMove}
+            onCancel={cancelMove} onConfirm={confirmMove}
           />
         )}
 
-        {/* Bouton Settings */}
         <TouchableOpacity style={styles.settingsBtn} onPress={openSettings} activeOpacity={0.8}>
           <Settings size={22} color={THEME.text} strokeWidth={2.2} />
         </TouchableOpacity>
 
-        {/* Bouton Lettre */}
         {!moving && !pendingTarget && (
           <TouchableOpacity style={styles.letterBtn} onPress={openLetterWrite} activeOpacity={0.8}>
             <ScrollText size={24} color={THEME.text} strokeWidth={2.2} />
           </TouchableOpacity>
         )}
 
-        {/* Modals */}
         {settingsOpen && (
-          <SettingsModal
-            profile={profile}
-            draftName={draftName}
-            setDraftName={setDraftName}
-            onPatch={(patch) => saveProfile(patch)}
-            debugEnabled={debugEnabled}
-            onToggleDebug={onToggleDebug}
-            onClose={() => setSettingsOpen(false)}
-            onValidateName={validateName}
-          />
+          <SettingsModal profile={profile} draftName={draftName} setDraftName={setDraftName}
+            onPatch={saveProfile} debugEnabled={debugEnabled} onToggleDebug={onToggleDebug}
+            onClose={() => setSettingsOpen(false)} onValidateName={validateName} />
         )}
-        {selectedPlayer && (
-          <PlayerDetailModal
-            player={selectedPlayer}
-            onClose={() => setSelectedPlayer(null)}
-          />
-        )}
+        {selectedPlayer && <PlayerDetailModal player={selectedPlayer} onClose={() => setSelectedPlayer(null)} />}
         {letterWriteOpen && (
-          <LetterWriteModal
-            value={letterDraft}
-            setValue={setLetterDraft}
-            onSend={sendLetter}
-            onClose={() => setLetterWriteOpen(false)}
-          />
+          <LetterWriteModal value={letterDraft} setValue={setLetterDraft}
+            onSend={sendLetter} onClose={() => setLetterWriteOpen(false)} />
         )}
-        {readingLetter && (
-          <LetterReadModal
-            letter={readingLetter}
-            onClose={closeReadingLetter}
-          />
-        )}
+        {readingLetter && <LetterReadModal letter={readingLetter} onClose={closeReadingLetter} />}
         {inventoryOpen && (
-          <InventoryModal
-            items={inventory}
-            onClose={() => setInventoryOpen(false)}
+          <InventoryModal items={inventory} onClose={() => setInventoryOpen(false)}
             onMarkRead={(id) => setInventory((prev) => prev.map((l) => l.id === id ? { ...l, unread: false } : l))}
-            onDelete={(id) => setInventory((prev) => prev.filter((l) => l.id !== id))}
-          />
+            onDelete={(id) => setInventory((prev) => prev.filter((l) => l.id !== id))} />
         )}
       </View>
     </GestureHandlerRootView>
@@ -1290,160 +1123,95 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#1a1a2e', overflow: 'hidden' },
+  // Fond eau : visible quand la map ne couvre pas tout l'écran (zoom out, bords)
+  container: { flex: 1, backgroundColor: WATER_COLOR, overflow: 'hidden' },
   canvas: { flex: 1 },
-  map: { position: 'absolute', backgroundColor: '#5da269' },
-  corner: { position: 'absolute', width: 80, height: 80 },
-  gridV: { position: 'absolute', top: 0, width: 1, height: MAP_SIZE, backgroundColor: 'rgba(255,255,255,0.18)' },
-  gridH: { position: 'absolute', left: 0, height: 1, width: MAP_SIZE, backgroundColor: 'rgba(255,255,255,0.18)' },
+  // backgroundColor map = eau aussi (cohérence si tile water non rendu)
+  map: { position: 'absolute', backgroundColor: WATER_COLOR },
 
   player: {
-    position: 'absolute',
-    width: 28, height: 28, borderRadius: 14,
-    backgroundColor: '#ff6b6b',
-    borderWidth: 3, borderColor: '#fff',
+    position: 'absolute', width: 28, height: 28, borderRadius: 14,
+    backgroundColor: '#ff6b6b', borderWidth: 3, borderColor: '#fff',
   },
   otherPlayer: {
-    position: 'absolute',
-    width: 24, height: 24, borderRadius: 12,
-    borderWidth: 2, borderColor: '#fff',
-    opacity: 0.95,
+    position: 'absolute', width: 24, height: 24, borderRadius: 12,
+    borderWidth: 2, borderColor: '#fff', opacity: 0.95,
   },
   otherPlayerLabel: {
-    position: 'absolute',
-    left: 0, top: 0, width: 120,
-    textAlign: 'center',
-    color: '#fff', fontSize: 11, fontWeight: '600',
-    lineHeight: 14,
-    textShadowColor: 'rgba(0,0,0,0.7)',
-    textShadowRadius: 3,
+    position: 'absolute', left: 0, top: 0, width: 120,
+    textAlign: 'center', color: '#fff', fontSize: 11, fontWeight: '600',
+    lineHeight: 14, textShadowColor: 'rgba(0,0,0,0.7)', textShadowRadius: 3,
   },
-
   targetMarker: {
-    position: 'absolute',
-    width: 28, height: 28, borderRadius: 14,
-    backgroundColor: 'rgba(255,217,61,0.25)',
-    borderWidth: 2, borderColor: '#ffd93d',
+    position: 'absolute', width: 28, height: 28, borderRadius: 14,
+    backgroundColor: 'rgba(255,217,61,0.25)', borderWidth: 2, borderColor: '#ffd93d',
     justifyContent: 'center', alignItems: 'center',
   },
   targetInner: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#ffd93d' },
-
   previewTargetOuter: {
-    position: 'absolute',
-    width: 36, height: 36, borderRadius: 18,
-    borderWidth: 2, borderColor: '#ffd93d',
-    backgroundColor: 'rgba(255,217,61,0.18)',
+    position: 'absolute', width: 36, height: 36, borderRadius: 18,
+    borderWidth: 2, borderColor: '#ffd93d', backgroundColor: 'rgba(255,217,61,0.18)',
   },
   previewTargetInner: {
-    position: 'absolute',
-    width: 12, height: 12, borderRadius: 6,
-    backgroundColor: '#ffd93d',
+    position: 'absolute', width: 12, height: 12, borderRadius: 6, backgroundColor: '#ffd93d',
   },
-
   hud: { position: 'absolute', top: 60, left: 0, right: 0, alignItems: 'center' },
   hudText: {
     color: '#fff', backgroundColor: 'rgba(0,0,0,0.6)',
     paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
     fontSize: 13, fontWeight: '600',
   },
-
   recenterBtn: {
-    position: 'absolute',
-    bottom: 156, right: 16,
+    position: 'absolute', bottom: 156, right: 16,
     width: 48, height: 48, borderRadius: 24,
-    backgroundColor: THEME.card,
-    borderWidth: 1.5, borderColor: THEME.border,
+    backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border,
     justifyContent: 'center', alignItems: 'center',
-    ...THEME.shadow,
-    shadowRadius: 12,
+    ...THEME.shadow, shadowRadius: 12,
   },
   iconText: { color: THEME.text, fontSize: 22, fontWeight: '700' },
-
   speedBtn: {
     position: 'absolute', bottom: 40, right: 16,
-    paddingHorizontal: 16, paddingVertical: 10,
-    borderRadius: 22,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    minWidth: 70, alignItems: 'center',
+    paddingHorizontal: 16, paddingVertical: 10, borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.7)', minWidth: 70, alignItems: 'center',
   },
   speedBtnActive: { backgroundColor: '#ff6b6b' },
   speedText: { color: '#fff', fontSize: 14, fontWeight: '700' },
-
   onlineBadge: {
     position: 'absolute', top: TOP_SAFE, left: 16,
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: THEME.card,
-    borderWidth: 1.5, borderColor: THEME.border,
+    backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border,
     paddingHorizontal: 10, paddingVertical: 6, borderRadius: THEME.radiusLg,
-    ...THEME.shadow,
-    shadowRadius: 10,
+    ...THEME.shadow, shadowRadius: 10,
   },
-  onlineDot: {
-    width: 9, height: 9, borderRadius: 4.5, marginRight: 7,
-    borderWidth: 1, borderColor: THEME.border,
-  },
+  onlineDot: { width: 9, height: 9, borderRadius: 4.5, marginRight: 7, borderWidth: 1, borderColor: THEME.border },
   onlineText: { color: THEME.text, fontSize: 12, fontWeight: '700' },
-
-  previewBar: {
-    position: 'absolute', bottom: 110, left: 20, right: 20,
-    backgroundColor: '#fff', borderRadius: 18,
-    paddingVertical: 14, paddingHorizontal: 18,
-    shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 14,
-    shadowOffset: { width: 0, height: 6 }, elevation: 8,
-  },
-  previewStats: {
-    flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center',
-    marginBottom: 14,
-  },
-  previewStat: { alignItems: 'center', flex: 1 },
-  previewStatLabel: { fontSize: 11, color: '#888', textTransform: 'uppercase', letterSpacing: 0.5 },
-  previewStatValue: { fontSize: 20, fontWeight: '700', color: '#1a1a2e', marginTop: 2 },
-  previewSep: { width: 1, height: 30, backgroundColor: '#eee' },
-  previewBtns: { flexDirection: 'row', gap: 10 },
-  previewBtn: {
-    flex: 1, paddingVertical: 12, borderRadius: 12, alignItems: 'center',
-  },
-  previewBtnCancel: { backgroundColor: '#f3f3f3' },
-  previewBtnGo: { backgroundColor: '#ff6b6b' },
-  previewBtnText: { fontSize: 15, fontWeight: '700', color: '#1a1a2e' },
-
+  recenterBtnText: { color: THEME.text, fontSize: 22 },
   settingsBtn: {
     position: 'absolute', top: TOP_SAFE, right: 16,
     width: 48, height: 48, borderRadius: 24,
-    backgroundColor: THEME.card,
-    borderWidth: 1.5, borderColor: THEME.border,
+    backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border,
     justifyContent: 'center', alignItems: 'center',
-    ...THEME.shadow,
-    shadowRadius: 10,
+    ...THEME.shadow, shadowRadius: 10,
   },
   inventoryBtn: {
     position: 'absolute', top: TOP_SAFE, right: 76,
     width: 48, height: 48, borderRadius: 24,
-    backgroundColor: THEME.card,
-    borderWidth: 1.5, borderColor: THEME.border,
+    backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border,
     justifyContent: 'center', alignItems: 'center',
-    ...THEME.shadow,
-    shadowRadius: 10,
+    ...THEME.shadow, shadowRadius: 10,
   },
   inventoryBadge: {
     position: 'absolute', top: -4, right: -4,
     minWidth: 18, height: 18, borderRadius: 9,
-    backgroundColor: THEME.danger,
-    borderWidth: 1.5, borderColor: THEME.card,
-    paddingHorizontal: 4,
-    justifyContent: 'center', alignItems: 'center',
+    backgroundColor: THEME.danger, borderWidth: 1.5, borderColor: THEME.card,
+    paddingHorizontal: 4, justifyContent: 'center', alignItems: 'center',
   },
-  inventoryBadgeText: {
-    color: '#fff', fontSize: 10, fontWeight: '800',
-  },
-
+  inventoryBadgeText: { color: '#fff', fontSize: 10, fontWeight: '800' },
   letterBtn: {
     position: 'absolute', bottom: 90, right: 16,
     width: 48, height: 48, borderRadius: 24,
-    backgroundColor: THEME.card,
-    borderWidth: 1.5, borderColor: THEME.border,
+    backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border,
     justifyContent: 'center', alignItems: 'center',
-    ...THEME.shadow,
-    shadowRadius: 12,
+    ...THEME.shadow, shadowRadius: 12,
   },
 });
