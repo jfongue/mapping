@@ -9,26 +9,23 @@
  *   1. Calcule le « segment » courant (tranche de 20 min)
  *   2. Dérive la position de départ et d'arrivée via un PRNG seedé
  *      par le numéro de segment → même seed = même trajet
- *      La distance est garantie entre MIN_TRIP_PX et MAX_TRIP_PX,
- *      ce qui assure des gros déplacements continus.
- *   3. La durée du segment est proportionnelle à la distance parcourue
- *      (distance / SPEED_PX_PER_SEC), ce qui garantit une vitesse constante
- *      et une apparence de mouvement permanent.
+ *   3. durationMs est calculé PROPORTIONNELLEMENT à la distance réelle
+ *      (dist / SPEED_PX_PER_SEC * 1000), ce qui garantit une vitesse
+ *      constante et une interpolation fluide côté client.
  *   4. Écrit dans Firebase :
  *        /players/botaniste_rebelle = {
  *          id, name, color,
  *          x, y (position réelle au moment du write),
  *          target: { fromX, fromY, toX, toY, startTs, durationMs },
- *          lastSeen  (= fin du segment, pas now — voir ci-dessous)
+ *          lastSeen  (= startTs + durationMs)
  *        }
  *   5. S'arrête — le client interpole la position via lerpFromTarget()
  *
- * Pourquoi lastSeen = fin du segment ?
- *   ONLINE_THRESHOLD_MS = 30 000 ms. Si on écrit lastSeen = now,
- *   la Botaniste passe offline 30s après le write. En écrivant
- *   lastSeen = startTs + durationMs (fin du segment), elle reste
- *   "online" pendant toute la durée du voyage. Le prochain run du
- *   cron (dans 20 min max) écrira le segment suivant avant expiration.
+ * Pourquoi lastSeen = startTs + durationMs ?
+ *   ONLINE_THRESHOLD_MS = 30 000 ms. En écrivant lastSeen = fin du voyage,
+ *   la Botaniste reste "online" pendant toute la durée du trajet.
+ *   Le prochain run du cron (dans 20 min max) écrira le segment suivant
+ *   avant expiration.
  *
  * Usage : node scripts/botaniste.js
  * Env   : FIREBASE_DB_URL (optionnel)
@@ -55,11 +52,10 @@ const MAP_W = 40;
 const MAP_H = 40;
 const TILE_PX = 50;
 
-// 20 min = cron cadence. Le client recevra TOUJOURS un target en cours.
-// Cohérent avec MAX_DURATION_MS = 60 000 — on envoie durationMs = SEGMENT_MS
-// mais le client ignore MAX_DURATION_MS pour les joueurs autres (il utilise
-// directement target.durationMs).
-const SEGMENT_MS = 20 * 60 * 1000; // 1 200 000 ms
+const SEGMENT_MS = 20 * 60 * 1000; // 1 200 000 ms — cadence du cron uniquement
+
+// Vitesse identique à celle des vrais joueurs (App.js : SPEED_PX_PER_SEC = 80)
+const SPEED_PX_PER_SEC = 80;
 
 const BOTANISTE_ID    = 'botaniste_rebelle';
 const BOTANISTE_COLOR = '#5dca8b';
@@ -163,23 +159,32 @@ function waypointForSegment(segmentIdx, offset) {
 function computeState(now) {
   const segmentIdx = Math.floor(now / SEGMENT_MS);
   const startTs    = segmentIdx * SEGMENT_MS;
-  const durationMs = SEGMENT_MS;
+
   const from = waypointForSegment(segmentIdx, 0);
   const to   = waypointForSegment(segmentIdx, 1);
 
-  const t = Math.min(1, (now - startTs) / durationMs);
+  // ✅ FIX : durationMs proportionnel à la distance réelle, pas à SEGMENT_MS.
+  // Avec SPEED_PX_PER_SEC = 80, un trajet de 1000 px dure ~12.5 s.
+  // Le client (App.js) utilise exactement cette valeur pour son Animated.timing,
+  // ce qui produit un déplacement visible et continu.
+  const dist = Math.hypot(to.x - from.x, to.y - from.y);
+  const durationMs = Math.round((dist / SPEED_PX_PER_SEC) * 1000);
+
+  const elapsed = Math.max(0, now - startTs);
+  const t = durationMs > 0 ? Math.min(1, elapsed / durationMs) : 1;
   const x = from.x + (to.x - from.x) * t;
   const y = from.y + (to.y - from.y) * t;
 
   return {
     x, y,
-    segmentEndTs: startTs + durationMs,
     target: {
       fromX: from.x, fromY: from.y,
       toX: to.x,     toY: to.y,
       startTs,
       durationMs,
     },
+    // lastSeen = fin du trajet → la botaniste reste online pendant tout le voyage
+    lastSeen: startTs + durationMs,
   };
 }
 
@@ -187,14 +192,19 @@ function computeState(now) {
 async function main() {
   const now   = Date.now();
   const state = computeState(now);
-  const remainSec = ((state.segmentEndTs - now) / 1000).toFixed(1);
+  const dist  = Math.hypot(
+    state.target.toX - state.target.fromX,
+    state.target.toY - state.target.fromY,
+  );
+  const remainMs = Math.max(0, state.lastSeen - now);
 
   console.log('🌿 La Botaniste Rebelle');
   console.log(`   segment   : ${Math.floor(now / SEGMENT_MS)}`);
+  console.log(`   distance  : ${dist.toFixed(0)} px`);
+  console.log(`   durée     : ${(state.target.durationMs / 1000).toFixed(1)} s`);
   console.log(`   position  : (${state.x.toFixed(1)}, ${state.y.toFixed(1)})`);
   console.log(`   → vers    : (${state.target.toX.toFixed(1)}, ${state.target.toY.toFixed(1)})`);
-  console.log(`   reste     : ${remainSec}s`);
-  console.log(`   lastSeen  : fin du segment (dans ${remainSec}s)`);
+  console.log(`   reste     : ${(remainMs / 1000).toFixed(1)} s`);
 
   const app = initializeApp(FIREBASE_CONFIG);
   const db  = getDatabase(app);
@@ -211,10 +221,7 @@ async function main() {
     x:        state.x,
     y:        state.y,
     target:   state.target,
-    // lastSeen = fin du segment : la Botaniste reste online
-    // (seuil ONLINE_THRESHOLD_MS = 30s) pendant tout le voyage.
-    // Le cron suivant (dans 20min max) écrira avant expiration.
-    lastSeen: state.segmentEndTs,
+    lastSeen: state.lastSeen,
   });
 
   console.log('✅ Firebase mis à jour.');
