@@ -12,6 +12,14 @@
  *   → L'ancienne position est écrasée — reprise fluide immédiate.
  *   3. S'arrête. Le client interpole via son Animated.timing.
  *
+ * Pourquoi startTs = now - fracInSeg * durationMs ?
+ *   Le client calcule :
+ *     elapsed = now - target.startTs
+ *     frac    = elapsed / target.durationMs
+ *   Pour que frac soit exactement fracInSeg au moment du write,
+ *   on pose startTs = now - fracInSeg * durationMs.
+ *   Ainsi frac < 1 → l'animation repart immédiatement vers toX/toY.
+ *
  * Usage : node scripts/botaniste.js
  * Env   : FIREBASE_DB_URL (optionnel)
  */
@@ -65,9 +73,9 @@ const FRAC_AB = DIST_AB / DIST_TOTAL;
 const FRAC_BC = DIST_BC / DIST_TOTAL;
 
 const SEGMENTS = [
-  { from: A, to: B, dist: DIST_AB, fracStart: 0,              fracEnd: FRAC_AB             },
-  { from: B, to: C, dist: DIST_BC, fracStart: FRAC_AB,        fracEnd: FRAC_AB + FRAC_BC   },
-  { from: C, to: A, dist: DIST_CA, fracStart: FRAC_AB + FRAC_BC, fracEnd: 1                },
+  { from: A, to: B, dist: DIST_AB, fracStart: 0,                   fracEnd: FRAC_AB           },
+  { from: B, to: C, dist: DIST_BC, fracStart: FRAC_AB,             fracEnd: FRAC_AB + FRAC_BC },
+  { from: C, to: A, dist: DIST_CA, fracStart: FRAC_AB + FRAC_BC,  fracEnd: 1                 },
 ];
 
 const SEG_NAMES = ['A → B', 'B → C', 'C → A'];
@@ -77,34 +85,49 @@ const BOTANISTE_COLOR = '#5dca8b';
 
 // ─── Calcul déterministe ────────────────────────────────────────────────────────────────
 /**
- * Retourne l'état exact de la Botaniste à l'instant `now` :
- *   - x, y          : position interpolée sur le segment courant
- *   - seg           : segment courant ({ from, to, dist, fracStart, fracEnd })
- *   - target        : { fromX, fromY, toX, toY, startTs, durationMs }
- *   - lastSeen      : fin du segment (pour rester online tout le trajet)
+ * Retourne l'état exact de la Botaniste à l'instant `now`.
+ *
+ * Clé : startTs est recalé sur `now` de façon à ce que :
+ *
+ *   elapsed  = now - startTs           = fracInSeg * durationMs
+ *   frac     = elapsed / durationMs    = fracInSeg  ∈ [0, 1)
+ *
+ * Le client reçoit donc un target valide où frac < 1 →
+ * l'Animated.timing part immédiatement depuis x/y vers toX/toY.
  */
 function computeState(now) {
-  const cycleStart  = Math.floor(now / TRIANGLE_CYCLE_MS) * TRIANGLE_CYCLE_MS;
-  const phase       = (now - cycleStart) / TRIANGLE_CYCLE_MS; // [0, 1)
+  const cycleStart = Math.floor(now / TRIANGLE_CYCLE_MS) * TRIANGLE_CYCLE_MS;
+  const phase      = (now - cycleStart) / TRIANGLE_CYCLE_MS; // [0, 1)
 
   const seg = SEGMENTS.find((s) => phase < s.fracEnd) || SEGMENTS[SEGMENTS.length - 1];
 
-  const fracInSeg  = (phase - seg.fracStart) / (seg.fracEnd - seg.fracStart);
-  const x          = seg.from.x + (seg.to.x - seg.from.x) * fracInSeg;
-  const y          = seg.from.y + (seg.to.y - seg.from.y) * fracInSeg;
+  // Fraction de progression dans le segment courant [0, 1)
+  const fracInSeg = (phase - seg.fracStart) / (seg.fracEnd - seg.fracStart);
 
-  const segStartTs = cycleStart + seg.fracStart * TRIANGLE_CYCLE_MS;
+  // Position actuelle interpolée
+  const x = seg.from.x + (seg.to.x - seg.from.x) * fracInSeg;
+  const y = seg.from.y + (seg.to.y - seg.from.y) * fracInSeg;
+
+  // Durée totale du segment
   const durationMs = Math.round((seg.dist / SPEED_PX_PER_SEC) * 1000);
 
+  // ✅ startTs recalé : elapsed = now - startTs = fracInSeg * durationMs
+  //    → le client obtient frac = fracInSeg < 1 et anime vers toX/toY
+  const startTs = now - Math.round(fracInSeg * durationMs);
+
+  // Temps restant jusqu'à la fin du segment
+  const remainMs = Math.round((1 - fracInSeg) * durationMs);
+
   return {
-    x, y, seg,
+    x, y, seg, fracInSeg, durationMs, remainMs,
     target: {
       fromX: seg.from.x, fromY: seg.from.y,
       toX:   seg.to.x,   toY:   seg.to.y,
-      startTs:    segStartTs,
+      startTs,
       durationMs,
     },
-    lastSeen: segStartTs + durationMs,
+    // lastSeen = fin effective du segment → elle reste online tout le trajet
+    lastSeen: now + remainMs,
   };
 }
 
@@ -113,22 +136,19 @@ async function main() {
   const now    = Date.now();
   const state  = computeState(now);
   const segIdx = SEGMENTS.indexOf(state.seg);
-  const remain = Math.max(0, state.lastSeen - now);
 
   console.log('🌿 La Botaniste Rebelle — RESET');
   console.log(`   cycle     : ${(TRIANGLE_CYCLE_MS / 1000).toFixed(0)} s total`);
-  console.log(`   segment   : ${SEG_NAMES[segIdx]}  (${state.seg.dist.toFixed(0)} px • ${(state.target.durationMs / 1000).toFixed(1)} s)`);
+  console.log(`   segment   : ${SEG_NAMES[segIdx]}  (${state.seg.dist.toFixed(0)} px • ${(state.durationMs / 1000).toFixed(1)} s)`);
+  console.log(`   progression: ${(state.fracInSeg * 100).toFixed(1)} %`);
   console.log(`   position  : (${state.x.toFixed(1)}, ${state.y.toFixed(1)})`);
   console.log(`   → vers    : (${state.target.toX.toFixed(1)}, ${state.target.toY.toFixed(1)})`);
-  console.log(`   reste     : ${(remain / 1000).toFixed(1)} s`);
+  console.log(`   reste     : ${(state.remainMs / 1000).toFixed(1)} s`);
+  console.log(`   startTs   : now - ${(state.fracInSeg * state.durationMs / 1000).toFixed(1)} s`);
 
   const app = initializeApp(FIREBASE_CONFIG);
   const db  = getDatabase(app);
 
-  // RESET + reprise : on écrase toute l'ancienne position en une seule opération.
-  // x / y     = position exacte sur le triangle à cet instant
-  // target    = segment en cours avec startTs correct → le client anime depuis ce point
-  // lastSeen  = fin du segment → elle reste "online" pendant tout le trajet
   await update(ref(db, `players/${BOTANISTE_ID}`), {
     id:       BOTANISTE_ID,
     name:     'La Botaniste Rebelle',
