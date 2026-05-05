@@ -1,66 +1,32 @@
-// Rendu de la map en Views natives (compositor RN, pas de SVG).
-// Beaucoup plus fluide qu'un Svg pour une map statique.
-import React, { useMemo } from 'react';
+// TileLayer — version chunk-aware.
+// Reçoit la Map<string, chunk> des chunks actifs et délègue le rendu
+// à ChunkTile (un composant par chunk). Seuls les chunks visibles sont
+// montés dans l'arbre React → mémoire et CPU proportionnels au viewport,
+// pas à la taille totale de la map.
+import React from 'react';
 import { View } from 'react-native';
-import { TILES_DATA, TILE_COLORS, TILE_PX, MAP_W, MAP_H } from '../src/tilemap';
+import ChunkTile from './ChunkTile';
+import { MAP_SIZE } from '../src/constants';
 
-export const MAP_W_PX = MAP_W * TILE_PX;
-export const MAP_H_PX = MAP_H * TILE_PX;
+export const MAP_W_PX = MAP_SIZE;
+export const MAP_H_PX = MAP_SIZE;
 
-function TileLayerImpl() {
-  const rects = useMemo(() => {
-    // Merge 2D greedy : étend à droite (max run même type), puis vers le bas tant que
-    // toute la tranche a le même type. Réduit massivement le nb de Views sur grande map.
-    const visited = new Uint8Array(MAP_W * MAP_H);
-    const out = [];
-    for (let y = 0; y < MAP_H; y++) {
-      for (let x = 0; x < MAP_W; x++) {
-        if (visited[y * MAP_W + x]) continue;
-        const t = TILES_DATA[y * MAP_W + x];
-        let xEnd = x;
-        while (xEnd < MAP_W && !visited[y * MAP_W + xEnd] && TILES_DATA[y * MAP_W + xEnd] === t) xEnd++;
-        let yEnd = y + 1;
-        outer: while (yEnd < MAP_H) {
-          for (let xx = x; xx < xEnd; xx++) {
-            if (visited[yEnd * MAP_W + xx] || TILES_DATA[yEnd * MAP_W + xx] !== t) break outer;
-          }
-          yEnd++;
-        }
-        for (let yy = y; yy < yEnd; yy++) {
-          for (let xx = x; xx < xEnd; xx++) {
-            visited[yy * MAP_W + xx] = 1;
-          }
-        }
-        out.push({
-          left: x * TILE_PX,
-          top: y * TILE_PX,
-          width: (xEnd - x) * TILE_PX,
-          height: (yEnd - y) * TILE_PX,
-          backgroundColor: TILE_COLORS[t],
-        });
-      }
-    }
-    return out;
-  }, []);
+function TileLayerImpl({ chunks }) {
+  const chunkList = chunks ? Array.from(chunks.values()) : [];
 
   return (
     <View
       pointerEvents="none"
       style={{ position: 'absolute', left: 0, top: 0, width: MAP_W_PX, height: MAP_H_PX }}
     >
-      {rects.map((r, i) => (
-        <View
-          key={i}
-          style={{
-            position: 'absolute',
-            left: r.left, top: r.top,
-            width: r.width, height: r.height,
-            backgroundColor: r.backgroundColor,
-          }}
-        />
+      {chunkList.map((chunk) => (
+        <ChunkTile key={chunk.key} chunk={chunk} />
       ))}
     </View>
   );
 }
 
-export default React.memo(TileLayerImpl);
+export default React.memo(TileLayerImpl, (prev, next) => {
+  // Re-render uniquement si la Map a changé (comparaison par référence)
+  return prev.chunks === next.chunks;
+});
