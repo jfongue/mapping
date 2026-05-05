@@ -38,6 +38,82 @@ function ensureInit() {
   db = getDatabase(app);
 }
 
+// ─── La Botaniste Rebelle — injection déterministe ─────────────────────────────
+//
+// Grand triangle A → B → C → A couvrant la quasi-totalité de la map.
+// La position est calculable à tout instant depuis `now` sans état persistant.
+//
+const _B_MAP_W_PX  = 40 * 50; // 2000 px
+const _B_MAP_H_PX  = 40 * 50; // 2000 px
+const _B_SPEED     = 80;       // px/s, identique à SPEED_PX_PER_SEC
+
+const _B_A = { x: 0.1 * _B_MAP_W_PX, y: 0.1 * _B_MAP_H_PX }; // (200,  200)
+const _B_B = { x: 0.9 * _B_MAP_W_PX, y: 0.1 * _B_MAP_H_PX }; // (1800, 200)
+const _B_C = { x: 0.5 * _B_MAP_W_PX, y: 0.9 * _B_MAP_H_PX }; // (1000, 1800)
+
+const _B_DIST_AB    = Math.hypot(_B_B.x - _B_A.x, _B_B.y - _B_A.y);
+const _B_DIST_BC    = Math.hypot(_B_C.x - _B_B.x, _B_C.y - _B_B.y);
+const _B_DIST_CA    = Math.hypot(_B_A.x - _B_C.x, _B_A.y - _B_C.y);
+const _B_DIST_TOTAL = _B_DIST_AB + _B_DIST_BC + _B_DIST_CA;
+const _B_CYCLE_MS   = Math.round((_B_DIST_TOTAL / _B_SPEED) * 1000);
+const _B_FRAC_AB    = _B_DIST_AB / _B_DIST_TOTAL;
+const _B_FRAC_BC    = _B_DIST_BC / _B_DIST_TOTAL;
+
+const _B_SEGMENTS = [
+  { from: _B_A, to: _B_B, dist: _B_DIST_AB, fracStart: 0,                      fracEnd: _B_FRAC_AB                },
+  { from: _B_B, to: _B_C, dist: _B_DIST_BC, fracStart: _B_FRAC_AB,             fracEnd: _B_FRAC_AB + _B_FRAC_BC  },
+  { from: _B_C, to: _B_A, dist: _B_DIST_CA, fracStart: _B_FRAC_AB + _B_FRAC_BC, fracEnd: 1                       },
+];
+
+function _botaniste_computeState(now) {
+  const cycleStart = Math.floor(now / _B_CYCLE_MS) * _B_CYCLE_MS;
+  const phase      = (now - cycleStart) / _B_CYCLE_MS;
+
+  const seg = _B_SEGMENTS.find((s) => phase < s.fracEnd) || _B_SEGMENTS[_B_SEGMENTS.length - 1];
+
+  const fracInSeg = (phase - seg.fracStart) / (seg.fracEnd - seg.fracStart);
+  const x         = seg.from.x + (seg.to.x - seg.from.x) * fracInSeg;
+  const y         = seg.from.y + (seg.to.y - seg.from.y) * fracInSeg;
+
+  const durationMs = Math.round((seg.dist / _B_SPEED) * 1000);
+  // startTs recalé : elapsed = now - startTs = fracInSeg * durationMs
+  // → frac côté client = fracInSeg ∈ [0, 1) → animation immédiate
+  const startTs    = now - Math.round(fracInSeg * durationMs);
+  const remainMs   = Math.round((1 - fracInSeg) * durationMs);
+
+  return {
+    x, y,
+    target: {
+      fromX: seg.from.x, fromY: seg.from.y,
+      toX:   seg.to.x,   toY:   seg.to.y,
+      startTs,
+      durationMs,
+    },
+    lastSeen: now + remainMs,
+  };
+}
+
+async function injectBotaniste() {
+  const now   = Date.now();
+  const state = _botaniste_computeState(now);
+  const botRef = ref(db, 'players/botaniste_rebelle');
+  await update(botRef, {
+    id:       'botaniste_rebelle',
+    name:     'La Botaniste Rebelle',
+    color:    '#5dca8b',
+    outfit:   'green',
+    skin:     'light',
+    hair:     'black',
+    hat:      'none',
+    x:        state.x,
+    y:        state.y,
+    target:   state.target,
+    lastSeen: state.lastSeen,
+  }).catch(() => {});
+}
+
+// ──────────────────────────────────────────────────────────────────────────────────────
+
 export async function joinMultiplayer({ playerId, name, color, x, y, outfit, skin, hair, hat }) {
   ensureInit();
   myId = playerId;
@@ -52,9 +128,10 @@ export async function joinMultiplayer({ playerId, name, color, x, y, outfit, ski
     lastSeen: Date.now(),
   });
   // À la déconnexion : juste maj lastSeen, on garde la trace
-  // serverTimestamp() est interdit dans onDisconnect (SDK web v9).
-  // On utilise un timestamp client suffisamment passé pour déclencher le seuil offline.
   onDisconnect(myRef).update({ lastSeen: Date.now() - 60_000 });
+
+  // Injection de la Botaniste (reset + position exacte sur le triangle)
+  await injectBotaniste();
 
   // Subscribe à tous les joueurs
   const allRef = ref(db, 'players');
@@ -83,12 +160,9 @@ export function announceMove({ from, to, startTs, durationMs }) {
   }).catch(() => {});
 }
 
-export function updateMyProfile({ name, color }) {
+export function updateMyProfile(patch) {
   if (!myRef) return;
-  const patch = { lastSeen: Date.now() };
-  if (name !== undefined) patch.name = name;
-  if (color !== undefined) patch.color = color;
-  update(myRef, patch).catch(() => {});
+  update(myRef, { ...patch, lastSeen: Date.now() }).catch(() => {});
 }
 
 export function clearMyMove(finalX, finalY) {
@@ -101,8 +175,6 @@ export function clearMyMove(finalX, finalY) {
 
 export function subscribePlayers(cb) {
   listeners.add(cb);
-  // Replay du dernier snapshot pour éviter la race entre onValue (1er fire)
-  // et l'ajout du listener côté composant.
   if (latestPlayers) cb(latestPlayers);
   return () => listeners.delete(cb);
 }
@@ -125,7 +197,6 @@ export async function dropLetter({ authorId, authorName, authorColor, x, y, text
   return newRef.key;
 }
 
-// Détruit une lettre (appelé après lecture).
 export async function consumeLetter(letterId) {
   ensureInit();
   await remove(ref(db, `letters/${letterId}`)).catch(() => {});
@@ -153,9 +224,6 @@ export function subscribeLetters(cb) {
 
 export async function leaveMultiplayer() {
   if (myRef) {
-    // On ne supprime PAS le nœud : remove() + joinMultiplayer() en race condition
-    // provoque des états fantômes. On marque simplement lastSeen dans le passé
-    // pour que les autres clients considèrent ce joueur comme offline.
     await update(myRef, { lastSeen: Date.now() - 60_000 }).catch(() => {});
     myRef = null;
   }
