@@ -91,7 +91,13 @@ export default function App() {
   const lastOffset = useRef({ x: INIT_X, y: INIT_Y });
 
   // ===== Zoom =====
-  const scale = useRef(new Animated.Value(1)).current;
+  // baseScale est la seule valeur qui pilote le scale visuel.
+  // pinchScale n'est conservé QUE pour recevoir les events natifs du PinchGestureHandler
+  // (Animated.event exige une Animated.Value cible), mais il n'est PAS dans le transform.
+  // Le listener JS lit pinchScale et met à jour baseScale + tx/ty de façon synchrone,
+  // ce qui évite tout conflit native thread / JS thread.
+  const baseScale = useRef(new Animated.Value(1)).current;
+  const pinchScale = useRef(new Animated.Value(1)).current; // réceptacle events natifs uniquement
   const lastScale = useRef(1);
   const pinchStartScale = useRef(1);
 
@@ -158,13 +164,10 @@ export default function App() {
   // ===== Animated values pour les gestes =====
   const dx = useRef(new Animated.Value(0)).current;
   const dy = useRef(new Animated.Value(0)).current;
-  const pinchScale = useRef(new Animated.Value(1)).current;
-  const baseScale = useRef(new Animated.Value(1)).current;
 
-  // Transforms composés
+  // Transform composés — baseScale seul pour le scale (pas de multiply avec pinchScale)
   const totalX = Animated.add(tx, dx);
   const totalY = Animated.add(ty, dy);
-  const totalScale = Animated.multiply(baseScale, pinchScale);
 
   // Listener id pour la compensation live du pivot pinch
   const pinchListenerId = useRef(null);
@@ -560,9 +563,10 @@ export default function App() {
     }
   };
 
-  // onPinchGesture : on N'utilise plus Animated.event pour piloter pinchScale directement,
-  // car RN scale autour du centre du View. On capture le focal point et on gère tout dans
-  // onPinchStateChange + un listener JS qui compense tx/ty en temps réel.
+  // onPinchGesture : Animated.event envoie les valeurs natives vers pinchScale,
+  // mais pinchScale N'EST PAS dans le transform. Un listener JS lit pinchScale
+  // et met à jour baseScale + tx/ty de façon synchrone sur le JS thread.
+  // Ainsi il n'y a qu'un seul pilote pour le transform → zéro flicker.
   const onPinchGesture = Animated.event(
     [{ nativeEvent: { scale: pinchScale } }],
     { useNativeDriver: true }
@@ -592,9 +596,8 @@ export default function App() {
         focalY: focY,
       };
 
-      // Listener live : à chaque tick du geste pinch, on recalcule tx/ty pour que
-      // le point focal reste fixe à l'écran pendant que RN scale autour du centre du View.
-      // Sans cette compensation, RN scale autour du centre de la map → dérive visuelle.
+      // Listener JS : à chaque tick natif, on recalcule baseScale + tx/ty.
+      // baseScale est la SEULE valeur dans le transform → pas de conflit de thread.
       if (pinchListenerId.current !== null) {
         pinchScale.removeListener(pinchListenerId.current);
       }
@@ -605,9 +608,10 @@ export default function App() {
         const { mapX, mapY, focalX: fX, focalY: fY } = pinchAnchor.current;
         const newTx = fX - cx2 * (1 - liveScale) - mapX * liveScale;
         const newTy = fY - cy2 * (1 - liveScale) - mapY * liveScale;
+        // Mise à jour synchrone de baseScale et de l'offset
+        baseScale.setValue(liveScale);
         tx.setValue(newTx);
         ty.setValue(newTy);
-        // Mise à jour de lastOffset en live pour que le pan suivant parte du bon endroit
         lastOffset.current = { x: newTx, y: newTy };
       });
     }
@@ -619,14 +623,18 @@ export default function App() {
         pinchListenerId.current = null;
       }
 
+      // Finalise le scale avec la valeur exacte du geste
       let next = pinchStartScale.current * gestureScale;
       next = Math.max(MIN_SCALE, Math.min(MAX_SCALE, next));
       lastScale.current = next;
-      baseScale.setValue(next);
+
+      // Remet pinchScale à 1 pour le prochain geste (il n'est pas dans le transform)
       pinchScale.setValue(1);
 
-      // À ce stade lastOffset.current a déjà été mis à jour en temps réel par le listener.
-      // On s'assure juste que tx/ty et baseScale sont cohérents.
+      // baseScale et lastOffset ont déjà été mis à jour en live — on s'assure juste
+      // que baseScale reflète la valeur finale clampée (le listener a pu recevoir
+      // une valeur légèrement différente de gestureScale à cause du clamping).
+      baseScale.setValue(next);
       tx.setValue(lastOffset.current.x);
       ty.setValue(lastOffset.current.y);
     }
@@ -986,7 +994,7 @@ export default function App() {
               <Animated.View style={styles.canvas} onLayout={onCanvasLayout}>
                 <Animated.View style={[styles.map, {
                   width: MAP_W_PX, height: MAP_H_PX,
-                  transform: [{ translateX: totalX }, { translateY: totalY }, { scale: totalScale }],
+                  transform: [{ translateX: totalX }, { translateY: totalY }, { scale: baseScale }],
                 }]}>
                   <TouchableWithoutFeedback onPress={handleTap}>
                     <View style={StyleSheet.absoluteFill}>
@@ -1178,7 +1186,7 @@ export default function App() {
               color={p.color}
               playerX={e.x} playerY={e.y}
               camX={totalX} camY={totalY}
-              scaleVal={totalScale}
+              scaleVal={baseScale}
               W={viewport.w} H={viewport.h}
             />
           );
