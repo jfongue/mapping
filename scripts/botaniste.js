@@ -4,19 +4,16 @@
  * Ce script tourne EN CONTINU (setInterval 5 s).
  * Il est la SEULE source de vérité pour la position de la botaniste.
  *
- * Principe :
- *   - Les 3 sommets du triangle sont définis en tiles, puis convertis en px.
- *   - buildMap() (identique à tilemap.js) génère la vraie carte → on vérifie
- *     que chaque sommet et chaque segment sont sur des cellules walkables.
- *   - Toutes les REFRESH_MS, on recalcule la position exacte depuis `now`
- *     et on écrit dans Firebase. Le client interpole via lerpFromTarget().
+ * Premier write : set() → purge complète du nœud (supprime tout champ
+ * résiduel en tiles ou autre format issu d'anciennes versions).
+ * Refreshs suivants : update() (plus léger, écrase les mêmes champs).
  *
  * Usage : node scripts/botaniste.js
  * Env   : FIREBASE_DB_URL (optionnel)
  */
 
-const { initializeApp, deleteApp } = require('firebase/app');
-const { getDatabase, ref, update }  = require('firebase/database');
+const { initializeApp } = require('firebase/app');
+const { getDatabase, ref, set, update } = require('firebase/database');
 
 // ─── Config Firebase ───────────────────────────────────────────────────────
 const FIREBASE_CONFIG = {
@@ -31,11 +28,11 @@ const FIREBASE_CONFIG = {
 };
 
 // ─── Constantes ────────────────────────────────────────────────────────────
-const MAP_W          = 40;
-const MAP_H          = 40;
-const TILE_PX        = 50;
-const SPEED_PX_PER_SEC = 80;   // identique à App.js
-const REFRESH_MS     = 5_000;  // fréquence d'écriture Firebase
+const MAP_W            = 40;
+const MAP_H            = 40;
+const TILE_PX          = 50;
+const SPEED_PX_PER_SEC = 80;    // identique à App.js
+const REFRESH_MS       = 5_000; // fréquence d'écriture Firebase
 
 const BOTANISTE_ID    = 'botaniste_rebelle';
 const BOTANISTE_COLOR = '#5dca8b';
@@ -93,9 +90,9 @@ function buildMap() {
       for (let x = 0; x < MAP_W; x++) {
         const counts = {};
         for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
-          const nx = x + ox, ny = y + oy;
-          if (nx < 0 || ny < 0 || nx >= MAP_W || ny >= MAP_H) continue;
-          const tt = tiles[ny * MAP_W + nx]; counts[tt] = (counts[tt] || 0) + 1;
+          const nx2 = x + ox, ny2 = y + oy;
+          if (nx2 < 0 || ny2 < 0 || nx2 >= MAP_W || ny2 >= MAP_H) continue;
+          const tt = tiles[ny2 * MAP_W + nx2]; counts[tt] = (counts[tt] || 0) + 1;
         }
         let best = tiles[y * MAP_W + x], bc = 0;
         for (const k in counts) if (counts[k] > bc) { bc = counts[k]; best = +k; }
@@ -111,16 +108,15 @@ function buildMap() {
 
 const MAP_TILES = buildMap();
 
-function tileAt(tx, ty) {
-  if (tx < 0 || ty < 0 || tx >= MAP_W || ty >= MAP_H) return 0;
-  return MAP_TILES[ty * MAP_W + tx];
+function tileAt(ttx, tty) {
+  if (ttx < 0 || tty < 0 || ttx >= MAP_W || tty >= MAP_H) return 0;
+  return MAP_TILES[tty * MAP_W + ttx];
 }
 
 function isWalkablePx(px, py) {
   return !!WALKABLE[tileAt(Math.floor(px / TILE_PX), Math.floor(py / TILE_PX))];
 }
 
-// Vérifie que le segment (ax,ay)→(bx,by) reste sur des tiles walkables
 function segmentOk(ax, ay, bx, by, steps = 30) {
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
@@ -129,28 +125,21 @@ function segmentOk(ax, ay, bx, by, steps = 30) {
   return true;
 }
 
-// ─── Triangle (défini en tiles, converti en px centre-de-tile) ────────────
-//
-// Tiles choisis dans la zone herbe/forêt confirmée par buildMap() :
-//   A = tile (28, 10)  →  px (1425, 525)
-//   B = tile (30, 29)  →  px (1525, 1475)
-//   C = tile (16, 26)  →  px (825,  1325)
-//
-function tilePx(tx, ty) {
-  return { x: tx * TILE_PX + TILE_PX / 2, y: ty * TILE_PX + TILE_PX / 2 };
+// ─── Triangle (tiles → px centre-de-tile) ──────────────────────────────────
+function tilePx(ttx, tty) {
+  return { x: ttx * TILE_PX + TILE_PX / 2, y: tty * TILE_PX + TILE_PX / 2 };
 }
 
 const TRIANGLE_TILES = [
-  { tx: 28, ty: 10 },  // A — haut-droite
-  { tx: 30, ty: 29 },  // B — bas-droite
-  { tx: 16, ty: 26 },  // C — bas-gauche
+  { tx: 28, ty: 10 },  // A — haut-droite  → px(1425, 525)
+  { tx: 30, ty: 29 },  // B — bas-droite   → px(1525, 1475)
+  { tx: 16, ty: 26 },  // C — bas-gauche   → px(825, 1325)
 ];
 
-// Validation au démarrage
 for (const { tx, ty } of TRIANGLE_TILES) {
   const t = tileAt(tx, ty);
   if (!WALKABLE[t]) {
-    console.error(`❌ Sommet (${tx},${ty}) n'est pas walkable (tile=${t}) !`);
+    console.error(`❌ Sommet tile(${tx},${ty}) n'est pas walkable (tile=${t}) !`);
     process.exit(1);
   }
 }
@@ -158,9 +147,8 @@ for (const { tx, ty } of TRIANGLE_TILES) {
 const [A, B, C] = TRIANGLE_TILES.map(({ tx, ty }) => tilePx(tx, ty));
 
 for (const [p1, p2, name] of [[A, B, 'A→B'], [B, C, 'B→C'], [C, A, 'C→A']]) {
-  if (!segmentOk(p1.x, p1.y, p2.x, p2.y)) {
-    console.warn(`⚠️  Segment ${name} passe par de l'eau — ajuste les sommets si nécessaire.`);
-  }
+  if (!segmentOk(p1.x, p1.y, p2.x, p2.y))
+    console.warn(`⚠️  Segment ${name} passe par de l'eau.`);
 }
 
 const DIST_AB    = Math.hypot(B.x - A.x, B.y - A.y);
@@ -172,9 +160,9 @@ const FRAC_AB    = DIST_AB / DIST_TOTAL;
 const FRAC_BC    = DIST_BC / DIST_TOTAL;
 
 const SEGMENTS = [
-  { from: A, to: B, dist: DIST_AB, name: 'A→B', fracStart: 0,              fracEnd: FRAC_AB           },
-  { from: B, to: C, dist: DIST_BC, name: 'B→C', fracStart: FRAC_AB,        fracEnd: FRAC_AB + FRAC_BC },
-  { from: C, to: A, dist: DIST_CA, name: 'C→A', fracStart: FRAC_AB + FRAC_BC, fracEnd: 1             },
+  { from: A, to: B, dist: DIST_AB, name: 'A→B', fracStart: 0,                    fracEnd: FRAC_AB           },
+  { from: B, to: C, dist: DIST_BC, name: 'B→C', fracStart: FRAC_AB,              fracEnd: FRAC_AB + FRAC_BC },
+  { from: C, to: A, dist: DIST_CA, name: 'C→A', fracStart: FRAC_AB + FRAC_BC,   fracEnd: 1                 },
 ];
 
 console.log('🌿 Triangle validé :');
@@ -195,9 +183,8 @@ function computeState(now) {
   const y = seg.from.y + (seg.to.y - seg.from.y) * fracInSeg;
 
   const durationMs = Math.round((seg.dist / SPEED_PX_PER_SEC) * 1000);
-  // startTs recalé → frac côté client = fracInSeg ∈ [0,1) → animation immédiate
-  const startTs  = now - Math.round(fracInSeg * durationMs);
-  const remainMs = Math.round((1 - fracInSeg) * durationMs);
+  const startTs    = now - Math.round(fracInSeg * durationMs);
+  const remainMs   = Math.round((1 - fracInSeg) * durationMs);
 
   return {
     x, y,
@@ -208,20 +195,16 @@ function computeState(now) {
       durationMs,
     },
     lastSeen: now + remainMs,
-    seg,
-    fracInSeg,
-    remainMs,
+    seg, fracInSeg, remainMs,
   };
 }
 
 // ─── Écriture Firebase ────────────────────────────────────────────────────
 let db = null;
+let firstWrite = true;
 
-async function writeToFirebase() {
-  const now   = Date.now();
-  const state = computeState(now);
-
-  await update(ref(db, `players/${BOTANISTE_ID}`), {
+function buildPayload(state) {
+  return {
     id:       BOTANISTE_ID,
     name:     'La Botaniste Rebelle',
     color:    BOTANISTE_COLOR,
@@ -233,12 +216,29 @@ async function writeToFirebase() {
     y:        state.y,
     target:   state.target,
     lastSeen: state.lastSeen,
-  });
+  };
+}
+
+async function writeToFirebase() {
+  const now     = Date.now();
+  const state   = computeState(now);
+  const payload = buildPayload(state);
+  const botRef  = ref(db, `players/${BOTANISTE_ID}`);
+
+  if (firstWrite) {
+    // set() = remplacement total → purge tout champ résiduel
+    // (ex: anciens x/y en tiles, target en mauvais format, etc.)
+    await set(botRef, payload);
+    firstWrite = false;
+    console.log('🧹 Nœud purgié et réécrit (set)');
+  } else {
+    await update(botRef, payload);
+  }
 
   console.log(
     `[${new Date().toISOString()}] ${state.seg.name}` +
     `  ${(state.fracInSeg * 100).toFixed(1)}%` +
-    `  pos=(${state.x.toFixed(0)},${state.y.toFixed(0)})` +
+    `  pos=(${state.x.toFixed(0)}, ${state.y.toFixed(0)})` +
     `  reste=${(state.remainMs / 1000).toFixed(1)}s`
   );
 }
@@ -248,10 +248,7 @@ async function main() {
   const app = initializeApp(FIREBASE_CONFIG);
   db = getDatabase(app);
 
-  // Premier write immédiat
-  await writeToFirebase();
-
-  // Puis toutes les REFRESH_MS
+  await writeToFirebase(); // premier write = set() complet
   setInterval(writeToFirebase, REFRESH_MS);
 
   console.log(`✅ Botaniste en cours — refresh toutes les ${REFRESH_MS / 1000}s. Ctrl+C pour arrêter.`);
