@@ -9,14 +9,19 @@
  *   1. Calcule le « segment » courant (tranche de 20 min)
  *   2. Dérive la position de départ et d'arrivée via un PRNG seedé
  *      par le numéro de segment → même seed = même trajet
- *   3. Écrit dans Firebase :
+ *      La distance est garantie entre MIN_TRIP_PX et MAX_TRIP_PX,
+ *      ce qui assure des gros déplacements continus.
+ *   3. La durée du segment est proportionnelle à la distance parcourue
+ *      (distance / SPEED_PX_PER_SEC), ce qui garantit une vitesse constante
+ *      et une apparence de mouvement permanent.
+ *   4. Écrit dans Firebase :
  *        /players/botaniste_rebelle = {
  *          id, name, color,
  *          x, y (position réelle au moment du write),
  *          target: { fromX, fromY, toX, toY, startTs, durationMs },
  *          lastSeen  (= fin du segment, pas now — voir ci-dessous)
  *        }
- *   4. S'arrête — le client interpole la position via lerpFromTarget()
+ *   5. S'arrête — le client interpole la position via lerpFromTarget()
  *
  * Pourquoi lastSeen = fin du segment ?
  *   ONLINE_THRESHOLD_MS = 30 000 ms. Si on écrit lastSeen = now,
