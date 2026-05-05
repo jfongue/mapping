@@ -2,22 +2,20 @@
 import { Platform, StatusBar as RNStatusBar } from 'react-native';
 
 // === Map & gameplay ===
-// MAP_SIZE : taille en pixels de la map complète.
-// Avec CHUNK_CELLS=10, TILE_PX=50, CHUNK_PX=500, CHUNKS_PER_AXIS=40 → 40×40 chunks.
-export const MAP_SIZE    = 20000;  // 400 tiles × 50px
-export const GRID_STEP   = 50;    // taille d'une cellule en px (== TILE_PX)
+export const MAP_SIZE = 2000;
+export const GRID_STEP = 200;
 export const SPEED_PX_PER_SEC = 80;
-export const MIN_DURATION_MS  = 5 * 1000;
-export const MAX_DURATION_MS  = 60 * 1000;
+export const MIN_DURATION_MS = 5 * 1000;
+export const MAX_DURATION_MS = 60 * 1000;
 export const PX_PER_METER = 10;
 
 // === Caméra ===
-export const MIN_SCALE = 0.1;   // zoom out élargi pour la grande map
+export const MIN_SCALE = 0.4;
 export const MAX_SCALE = 2.5;
 
 // === Multi ===
 export const ONLINE_THRESHOLD_MS = 30 * 1000;
-export const TAP_PLAYER_RADIUS   = 30;
+export const TAP_PLAYER_RADIUS = 30;
 export const SPEED_LEVELS = [1, 2, 4, 8, 15, 30];
 
 // === Layout ===
@@ -38,8 +36,8 @@ export const ANIMAL_NAMES = [
 ];
 
 // === Storage keys ===
-// v4 : map 400×400 → coords antérieures invalides, on reset au spawn central
-export const SAVE_KEY    = '@treasureProto.pos.v4';
+// v3 : map 128×128 → coords antérieures invalides, on reset au spawn central
+export const SAVE_KEY = '@treasureProto.pos.v3';
 export const PROFILE_KEY = '@treasureProto.profile.v1';
 
 // === Spawn ===
