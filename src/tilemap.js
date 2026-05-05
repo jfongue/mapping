@@ -44,10 +44,11 @@ export const TILE_COLORS = {
 
 export const TILE_PX = 50; // 1 tile = 50 px
 
-// Map de démo 40×40 : île centrale, eau autour, forêts, montagnes au nord.
-// Construction : algorithme simple basé sur distance au centre + bruit fixe.
-export const MAP_W = 40;
-export const MAP_H = 40;
+// Map de démo 128×128 (~10× plus grande en surface, 3.2× en longueur) :
+// île centrale, eau autour, forêts, montagnes.
+// 128*50 = 6400 px : reste sous les limites texture GPU (iOS ~8192 px).
+export const MAP_W = 128;
+export const MAP_H = 128;
 
 // PRNG seedé déterministe.
 function makeRand(seed) {
@@ -89,9 +90,9 @@ function buildDemoMap() {
   const maxR = Math.min(MAP_W, MAP_H) / 2;
 
   const rand = makeRand(1234);
-  // Bruit doux : grosse échelle = grosses zones cohérentes
-  const noiseElev = smoothedNoise(MAP_W, MAP_H, 8, rand);
-  const noiseBiome = smoothedNoise(MAP_W, MAP_H, 6, makeRand(5678));
+  // Bruit doux : grosse échelle = grosses zones cohérentes (échelle proportionnelle à la map)
+  const noiseElev = smoothedNoise(MAP_W, MAP_H, MAP_W / 5, rand);
+  const noiseBiome = smoothedNoise(MAP_W, MAP_H, MAP_W / 7, makeRand(5678));
 
   for (let y = 0; y < MAP_H; y++) {
     for (let x = 0; x < MAP_W; x++) {
@@ -115,23 +116,23 @@ function buildDemoMap() {
   }
 
   // 2 passes de "majority filter" : chaque tile prend le type majoritaire de ses voisins.
-  // Réduit les blocs isolés → grosses zones nettes.
+  // Counts en typed array (6 types fixes) : pas d'allocation d'objet par tile.
   const tmp = new Uint8Array(MAP_W * MAP_H);
+  const counts = new Uint8Array(6);
   for (let pass = 0; pass < 2; pass++) {
     for (let y = 0; y < MAP_H; y++) {
       for (let x = 0; x < MAP_W; x++) {
-        const counts = {};
+        counts.fill(0);
         for (let oy = -1; oy <= 1; oy++) {
           for (let ox = -1; ox <= 1; ox++) {
             const nx = x + ox, ny = y + oy;
             if (nx < 0 || ny < 0 || nx >= MAP_W || ny >= MAP_H) continue;
-            const tt = tiles[ny * MAP_W + nx];
-            counts[tt] = (counts[tt] || 0) + 1;
+            counts[tiles[ny * MAP_W + nx]]++;
           }
         }
         let best = tiles[y * MAP_W + x], bestCount = 0;
-        for (const k in counts) {
-          if (counts[k] > bestCount) { bestCount = counts[k]; best = +k; }
+        for (let k = 0; k < 6; k++) {
+          if (counts[k] > bestCount) { bestCount = counts[k]; best = k; }
         }
         tmp[y * MAP_W + x] = best;
       }
@@ -139,12 +140,15 @@ function buildDemoMap() {
     tiles.set(tmp);
   }
 
-  // Spawn central garanti
+  // Spawn central garanti (zone large, proportionnelle à la map)
   const sx = Math.floor(MAP_W / 2);
   const sy = Math.floor(MAP_H / 2);
-  for (let oy = -2; oy <= 2; oy++) {
-    for (let ox = -2; ox <= 2; ox++) {
-      tiles[(sy + oy) * MAP_W + (sx + ox)] = TILES.PLAIN;
+  const spawnR = Math.max(3, Math.floor(MAP_W / 50));
+  for (let oy = -spawnR; oy <= spawnR; oy++) {
+    for (let ox = -spawnR; ox <= spawnR; ox++) {
+      const xx = sx + ox, yy = sy + oy;
+      if (xx < 0 || xx >= MAP_W || yy < 0 || yy >= MAP_H) continue;
+      tiles[yy * MAP_W + xx] = TILES.PLAIN;
     }
   }
 
@@ -153,7 +157,46 @@ function buildDemoMap() {
 
 export const TILES_DATA = buildDemoMap();
 
-// === Pathfinding Dijkstra avec coûts (forêt = plus lente) ===
+// === Pathfinding A* + tas binaire (scalable jusqu'à grandes maps) ===
+// Heuristique : distance octile (admissible avec déplacements diagonaux).
+function octile(ax, ay, bx, by) {
+  const dx = Math.abs(ax - bx), dy = Math.abs(ay - by);
+  return (dx + dy) + (Math.SQRT2 - 2) * Math.min(dx, dy);
+}
+
+// Tas binaire min, items = [priority, idx]
+class MinHeap {
+  constructor() { this.a = []; }
+  push(item) {
+    const a = this.a;
+    a.push(item);
+    let i = a.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (a[i][0] < a[p][0]) { const t = a[i]; a[i] = a[p]; a[p] = t; i = p; } else break;
+    }
+  }
+  pop() {
+    const a = this.a;
+    if (a.length === 0) return null;
+    const top = a[0];
+    const last = a.pop();
+    if (a.length > 0) {
+      a[0] = last;
+      let i = 0, n = a.length;
+      while (true) {
+        const l = 2 * i + 1, r = 2 * i + 2;
+        let best = i;
+        if (l < n && a[l][0] < a[best][0]) best = l;
+        if (r < n && a[r][0] < a[best][0]) best = r;
+        if (best !== i) { const t = a[i]; a[i] = a[best]; a[best] = t; i = best; } else break;
+      }
+    }
+    return top;
+  }
+  get size() { return this.a.length; }
+}
+
 export function findPath(tiles, W, H, sx, sy, tx, ty) {
   sx = Math.round(sx); sy = Math.round(sy);
   tx = Math.round(tx); ty = Math.round(ty);
@@ -178,36 +221,35 @@ export function findPath(tiles, W, H, sx, sy, tx, ty) {
     tx = best.x; ty = best.y;
   }
 
-  // Dijkstra simple (queue triée à chaque pop : O(n²) mais ok pour 40×40)
-  const dist = new Float32Array(W * H);
-  for (let i = 0; i < dist.length; i++) dist[i] = Infinity;
-  const prev = new Int32Array(W * H); prev.fill(-1);
-  const inQueue = new Uint8Array(W * H);
+  const N = W * H;
+  const gScore = new Float32Array(N);
+  for (let i = 0; i < N; i++) gScore[i] = Infinity;
+  const prev = new Int32Array(N); prev.fill(-1);
+  const closed = new Uint8Array(N);
 
   const startIdx = sy * W + sx;
-  dist[startIdx] = 0;
-  const queue = new Set([startIdx]);
-  inQueue[startIdx] = 1;
-  const dirs = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,1],[1,-1],[-1,-1]];
   const targetIdx = ty * W + tx;
+  gScore[startIdx] = 0;
+  const open = new MinHeap();
+  open.push([octile(sx, sy, tx, ty), startIdx]);
+
+  const dirs = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,1],[1,-1],[-1,-1]];
   let found = false;
 
-  while (queue.size > 0) {
-    // pop le min
-    let bestIdx = -1, bestD = Infinity;
-    for (const i of queue) {
-      if (dist[i] < bestD) { bestD = dist[i]; bestIdx = i; }
-    }
-    if (bestIdx === -1) break;
-    queue.delete(bestIdx);
-    inQueue[bestIdx] = 0;
-    if (bestIdx === targetIdx) { found = true; break; }
+  while (open.size > 0) {
+    const [, idx] = open.pop();
+    if (closed[idx]) continue;
+    if (idx === targetIdx) { found = true; break; }
+    closed[idx] = 1;
 
-    const x = bestIdx % W, y = (bestIdx / W) | 0;
-    for (const [dx, dy] of dirs) {
+    const x = idx % W, y = (idx / W) | 0;
+    const gCur = gScore[idx];
+    for (let d = 0; d < 8; d++) {
+      const dx = dirs[d][0], dy = dirs[d][1];
       const nx = x + dx, ny = y + dy;
       if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
       const ni = ny * W + nx;
+      if (closed[ni]) continue;
       const tt = tiles[ni];
       if (!WALKABLE[tt]) continue;
       if (dx !== 0 && dy !== 0) {
@@ -215,11 +257,12 @@ export function findPath(tiles, W, H, sx, sy, tx, ty) {
       }
       const stepDist = (dx !== 0 && dy !== 0) ? Math.SQRT2 : 1;
       const cost = stepDist * (WALK_COST[tt] || 1);
-      const nd = dist[bestIdx] + cost;
-      if (nd < dist[ni]) {
-        dist[ni] = nd;
-        prev[ni] = bestIdx;
-        if (!inQueue[ni]) { queue.add(ni); inQueue[ni] = 1; }
+      const ng = gCur + cost;
+      if (ng < gScore[ni]) {
+        gScore[ni] = ng;
+        prev[ni] = idx;
+        const f = ng + octile(nx, ny, tx, ty);
+        open.push([f, ni]);
       }
     }
   }
@@ -232,7 +275,7 @@ export function findPath(tiles, W, H, sx, sy, tx, ty) {
     cur = prev[cur];
   }
   path.reverse();
-  return path; // pas de simplification : on veut garder les détours autour de la forêt
+  return path;
 }
 
 function simplifyPath(path, tiles, W) {

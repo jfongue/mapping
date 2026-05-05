@@ -36,7 +36,8 @@ export const ANIMAL_NAMES = [
 ];
 
 // === Storage keys ===
-export const SAVE_KEY = '@treasureProto.pos.v1';
+// v3 : map 128×128 → coords antérieures invalides, on reset au spawn central
+export const SAVE_KEY = '@treasureProto.pos.v3';
 export const PROFILE_KEY = '@treasureProto.profile.v1';
 
 // === Spawn ===

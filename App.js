@@ -588,11 +588,25 @@ export default function App() {
     { useNativeDriver: true }
   );
 
+  // Snapshot du point map sous le centre écran au début du pinch, pour
+  // recoller la caméra à la fin et que le zoom paraisse pivoter autour
+  // du centre écran (et pas du centre de la map qui est très loin).
+  const pinchAnchor = useRef({ mapX: 0, mapY: 0 });
+
   const onPinchStateChange = (e) => {
     const { state } = e.nativeEvent;
-    // Le pinch déplace aussi la caméra visuellement
     if (state === State.BEGAN) {
       markUserHasPanned();
+      const vw = viewport.w || SCREEN_W;
+      const vh = viewport.h || SCREEN_H;
+      const s = lastScale.current;
+      const cx = MAP_W_PX / 2;
+      const cy = MAP_H_PX / 2;
+      // Inversion de computeCenteredOffset : map coord du point écran vw/2, vh/2
+      pinchAnchor.current = {
+        mapX: (vw / 2 - lastOffset.current.x - cx * (1 - s)) / s,
+        mapY: (vh / 2 - lastOffset.current.y - cy * (1 - s)) / s,
+      };
     }
     if (state === State.END || state === State.CANCELLED) {
       let next = lastScale.current * e.nativeEvent.scale;
@@ -600,6 +614,17 @@ export default function App() {
       lastScale.current = next;
       baseScale.setValue(next);
       pinchScale.setValue(1);
+
+      // Recale tx/ty pour que le point map snapshotté reste au centre écran
+      const vw = viewport.w || SCREEN_W;
+      const vh = viewport.h || SCREEN_H;
+      const cx = MAP_W_PX / 2;
+      const cy = MAP_H_PX / 2;
+      const newTx = vw / 2 - cx * (1 - next) - pinchAnchor.current.mapX * next;
+      const newTy = vh / 2 - cy * (1 - next) - pinchAnchor.current.mapY * next;
+      lastOffset.current = { x: newTx, y: newTy };
+      tx.setValue(newTx);
+      ty.setValue(newTy);
     }
   };
 
@@ -1107,19 +1132,19 @@ export default function App() {
                         );
                       })}
 
-                      {/* Perso */}
+                      {/* Perso (même taille que les autres) */}
                       <Animated.View style={{
                         position: 'absolute',
-                        width: 60, height: 60,
+                        width: 50, height: 50,
                         transform: [
-                          { translateX: Animated.subtract(animX, 30) },
-                          { translateY: Animated.subtract(Animated.subtract(animY, 30), Animated.multiply(bounce, 6)) },
+                          { translateX: Animated.subtract(animX, 25) },
+                          { translateY: Animated.subtract(Animated.subtract(animY, 25), Animated.multiply(bounce, 6)) },
                           { scaleX: bounce.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) },
                           { scaleY: bounce.interpolate({ inputRange: [0, 1], outputRange: [1, 0.94] }) },
                         ],
                       }}>
                         <AdventurerSprite
-                          size={60} viewBoxScale={1.4}
+                          size={50} viewBoxScale={1.2}
                           dir="down" moving={moving}
                           outfit={profile?.outfit || 'red'}
                           skin={profile?.skin || 'light'}
