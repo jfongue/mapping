@@ -1,3 +1,6 @@
+// NOTE: Logique de résolution d'arrivée extraite (pickupCoins, pickupChests, visitPOIs).
+// Non importée dans App.js — logique dupliquée inline. Candidat à remplacer le code App.js.
+
 // Logique de résolution d'arrivée — pure, testable.
 import { TILE, COIN_PICKUP_RADIUS, CHEST_PICKUP_RADIUS, POI_VISIT_RADIUS } from './constants';
 import { distPointToPolyline } from './geometry';

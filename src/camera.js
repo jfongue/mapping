@@ -1,3 +1,6 @@
+// NOTE: Utilitaires caméra purs (testables). Non importés dans App.js pour l'instant
+// — les calculs équivalents sont inline. Candidat à utiliser dans un refactor caméra futur.
+
 // Conversions et calculs caméra (pur, testable).
 // La map applique : screen = (mapPoint + camOffset) * scale.
 
