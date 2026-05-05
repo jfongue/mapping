@@ -24,6 +24,7 @@ import {
   ONLINE_THRESHOLD_MS, TAP_PLAYER_RADIUS, SPEED_LEVELS,
   TOP_SAFE, SAVE_KEY, PROFILE_KEY,
   PLAYER_COLORS,
+  SPEED_PX_PER_SEC, MIN_DURATION_MS, MAX_DURATION_MS,
 } from './src/constants';
 import { THEME } from './src/theme';
 
@@ -37,23 +38,18 @@ import { sampleAt } from './src/smoothing';
 import TileLayer, { MAP_W_PX, MAP_H_PX } from './components/TileLayer';
 import DottedTrail from './components/DottedTrail';
 
-// Couleur eau (doit correspondre à TILE_COLORS[0] dans tilemap.js)
 const WATER_COLOR = '#bce0e8';
 
-// Trouve la case walkable la plus proche d'une position pixel.
-// Retourne { x, y } en pixels (centre de tile), ou SPAWN si rien trouvé.
 function safePixelPos(px, py) {
   const tx = Math.floor(px / TILE_PX);
   const ty = Math.floor(py / TILE_PX);
   const tileIdx = ty * MAP_W + tx;
-  // Déjà safe ?
   if (
     tx >= 0 && tx < MAP_W && ty >= 0 && ty < MAP_H &&
     WALKABLE[TILES_DATA[tileIdx]]
   ) {
     return { x: px, y: py };
   }
-  // Recherche en spirale
   for (let r = 1; r <= 20; r++) {
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
@@ -69,7 +65,6 @@ function safePixelPos(px, py) {
       }
     }
   }
-  // Fallback : spawn central
   return { x: (MAP_W / 2) * TILE_PX, y: (MAP_H / 2) * TILE_PX };
 }
 
@@ -88,9 +83,6 @@ function buildStraightPath(cellPath, startPx) {
 
 const MAP_SIZE = MAP_W_PX;
 const SPAWN = { x: (MAP_W / 2) * TILE_PX, y: (MAP_H / 2) * TILE_PX };
-const SPEED_PX_PER_SEC = 80;
-const MIN_DURATION_FALLBACK = 5000;
-const MAX_DURATION_FALLBACK = 60000;
 import { formatMeters, formatDuration } from './src/format';
 import { movementDuration, lerpFromTarget, remainingDurationAt } from './src/movement';
 import { generateProfile, isPlayerOnline } from './src/profile';
@@ -182,8 +174,6 @@ export default function App() {
 
   const pinchListenerId = useRef(null);
 
-  // === HELPERS RECENTER ===
-
   const computeCenteredOffset = (charX, charY, vw, vh, s) => {
     const cx = MAP_W_PX / 2;
     const cy = MAP_H_PX / 2;
@@ -198,8 +188,6 @@ export default function App() {
     userHasPanned.current = true;
     stopFollowLoop();
   };
-
-  // === FOLLOW LOOP ===
 
   const stopFollowLoop = () => {
     if (followRafId.current) {
@@ -235,8 +223,6 @@ export default function App() {
     return stopFollowLoop;
   }, [moving]);
 
-  // === EFFECTS ===
-
   // Charge save pos — téléporte sur case safe si zone interdite
   useEffect(() => {
     (async () => {
@@ -256,13 +242,11 @@ export default function App() {
     })();
   }, []);
 
-  // Sauve pos
   useEffect(() => {
     if (!loaded) return;
     AsyncStorage.setItem(SAVE_KEY, JSON.stringify({ pos })).catch(() => {});
   }, [loaded, pos]);
 
-  // Charge ou crée profil
   useEffect(() => {
     (async () => {
       let p = null;
@@ -279,7 +263,6 @@ export default function App() {
     })();
   }, []);
 
-  // Connexion Firebase (multi)
   useEffect(() => {
     if (!profile) return;
     let unsub = null;
@@ -305,7 +288,6 @@ export default function App() {
     };
   }, [profile?.id]);
 
-  // Anim values des autres joueurs
   useEffect(() => {
     const seen = new Set();
     for (const p of otherPlayers) {
@@ -421,13 +403,11 @@ export default function App() {
     }
   }, [otherPlayers]);
 
-  // Subscribe aux lettres
   useEffect(() => {
     const unsub = subscribeLetters(setLetters);
     return () => unsub();
   }, []);
 
-  // Charge inventaire
   useEffect(() => {
     (async () => {
       try {
@@ -441,19 +421,16 @@ export default function App() {
     })();
   }, []);
 
-  // Sauve inventaire
   useEffect(() => {
     if (!inventoryLoaded) return;
     AsyncStorage.setItem(INVENTORY_KEY, JSON.stringify(inventory)).catch(() => {});
   }, [inventory, inventoryLoaded]);
 
-  // Tick global online
   useEffect(() => {
     const id = setInterval(() => { globalNowRef.current = Date.now(); }, 5000);
     return () => clearInterval(id);
   }, []);
 
-  // Polling recenter button
   useEffect(() => {
     const id = setInterval(() => {
       const vw = viewport.w || SCREEN_W;
@@ -475,7 +452,6 @@ export default function App() {
     return () => clearInterval(id);
   }, [viewport.w, viewport.h]);
 
-  // Sautillement perso
   useEffect(() => {
     if (!moving) {
       Animated.timing(bounce, { toValue: 0, duration: 150, useNativeDriver: true }).start();
@@ -491,7 +467,6 @@ export default function App() {
     return () => loop.stop();
   }, [moving]);
 
-  // Respiration douce offline
   useEffect(() => {
     let cancelled = false;
     const tick = () => {
@@ -505,7 +480,6 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
-  // Centrage initial
   useEffect(() => {
     if (isInitialCenter.current || !loaded || viewport.w === 0) return;
     const s = lastScale.current;
@@ -520,7 +494,6 @@ export default function App() {
     isInitialCenter.current = true;
   }, [loaded, viewport.w, viewport.h]);
 
-  // Speed change pendant déplacement
   useEffect(() => {
     if (!moving || !moveTarget.current) return;
     const samples = activePathRef.current;
@@ -543,8 +516,6 @@ export default function App() {
   useEffect(() => {
     return () => { if (speedTimer.current) clearTimeout(speedTimer.current); };
   }, []);
-
-  // === GESTURES ===
 
   const onPanGesture = Animated.event(
     [{ nativeEvent: { translationX: dx, translationY: dy } }],
@@ -626,8 +597,6 @@ export default function App() {
     setViewport({ w: width, h: height });
   };
 
-  // === HELPERS ===
-
   const isOnline = (p) => isPlayerOnline(p, globalNowRef.current, ONLINE_THRESHOLD_MS);
 
   const computePlayerPos = (p) => {
@@ -665,8 +634,6 @@ export default function App() {
     }
     return best;
   };
-
-  // === ACTIONS ===
 
   const handleTap = (evt) => {
     const t = { x: evt.nativeEvent.locationX, y: evt.nativeEvent.locationY };
@@ -752,7 +719,11 @@ export default function App() {
 
   const startMoveAlongCurve = (samples, length) => {
     if (!samples || samples.length < 2) return;
-    const baseDuration = Math.max(MIN_DURATION_FALLBACK, Math.min(MAX_DURATION_FALLBACK, (length / SPEED_PX_PER_SEC) * 1000));
+    // Durée basée sur la vitesse fixe de constants.js — aucun plafond arbitraire local
+    const baseDuration = Math.max(
+      MIN_DURATION_MS,
+      Math.min(MAX_DURATION_MS, (length / SPEED_PX_PER_SEC) * 1000)
+    );
     const dur = baseDuration / speedMul;
     moveTarget.current = samples[samples.length - 1];
     moveBaseDuration.current = baseDuration;
@@ -921,9 +892,10 @@ export default function App() {
 
   const previewStats = pendingTarget ? (() => {
     const length = pendingTarget.length || 0;
-    let durMs = (length / SPEED_PX_PER_SEC) * 1000;
-    durMs = Math.max(MIN_DURATION_FALLBACK, Math.min(MAX_DURATION_FALLBACK, durMs));
-    durMs = durMs / Math.max(1, speedMul);
+    const durMs = Math.max(
+      MIN_DURATION_MS,
+      Math.min(MAX_DURATION_MS, (length / SPEED_PX_PER_SEC) * 1000)
+    ) / Math.max(1, speedMul);
     return { dist: Math.round(length), durSec: Math.round(durMs / 1000) };
   })() : null;
 
@@ -1123,12 +1095,9 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  // Fond eau : visible quand la map ne couvre pas tout l'écran (zoom out, bords)
   container: { flex: 1, backgroundColor: WATER_COLOR, overflow: 'hidden' },
   canvas: { flex: 1 },
-  // backgroundColor map = eau aussi (cohérence si tile water non rendu)
   map: { position: 'absolute', backgroundColor: WATER_COLOR },
-
   player: {
     position: 'absolute', width: 28, height: 28, borderRadius: 14,
     backgroundColor: '#ff6b6b', borderWidth: 3, borderColor: '#fff',
