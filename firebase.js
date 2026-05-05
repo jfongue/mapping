@@ -29,6 +29,7 @@ let myRef = null;
 let listeners = new Set();
 let unsubAll = null;
 let lastPush = 0;
+let latestPlayers = null; // dernier snapshot connu, pour replay au subscribe
 const PUSH_THROTTLE_MS = 250;
 
 function ensureInit() {
@@ -60,6 +61,7 @@ export async function joinMultiplayer({ playerId, name, color, x, y, outfit, ski
   unsubAll = onValue(allRef, (snap) => {
     const data = snap.val() || {};
     const list = Object.values(data).filter((p) => p && p.id !== playerId);
+    latestPlayers = list;
     for (const cb of listeners) cb(list);
   });
 }
@@ -99,6 +101,9 @@ export function clearMyMove(finalX, finalY) {
 
 export function subscribePlayers(cb) {
   listeners.add(cb);
+  // Replay du dernier snapshot pour éviter la race entre onValue (1er fire)
+  // et l'ajout du listener côté composant.
+  if (latestPlayers) cb(latestPlayers);
   return () => listeners.delete(cb);
 }
 
@@ -159,4 +164,5 @@ export async function leaveMultiplayer() {
     unsubAll = null;
   }
   listeners.clear();
+  latestPlayers = null;
 }
