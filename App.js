@@ -193,7 +193,7 @@ export default function App() {
     followRafId.current = requestAnimationFrame(loop);
   };
 
-  // Démarre/arrête le follow loop selon moving et userHasPanned
+  // Démarre/arrête le follow loop — uniquement en mode follow et hors recentrage.
   useEffect(() => {
     if (moving && !userHasPanned.current) {
       startFollowLoop();
