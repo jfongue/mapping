@@ -87,11 +87,16 @@ function AdventurerInnerImpl({ x = 0, y = 0, dir = 'down', moving = false, scale
             {dir === 'down' && <Circle cx="1.2" cy="-7" r="0.6" fill="#1a1a1a" />}
           </G>
         )}
-        {/* arms moving */}
-        {moving && (
+        {/* arms: idle (bras le long du corps) ou moving (bras écartés) */}
+        {moving ? (
           <G>
             <Rect x="-5.5" y="-2" width="2" height="4" fill={sk} />
             <Rect x="3.5" y="-2" width="2" height="4" fill={sk} />
+          </G>
+        ) : (
+          <G>
+            <Rect x="-5" y="-1" width="2" height="3.5" fill={sk} />
+            <Rect x="3" y="-1" width="2" height="3.5" fill={sk} />
           </G>
         )}
         {/* sword */}
