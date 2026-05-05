@@ -29,7 +29,7 @@ let myRef = null;
 let listeners = new Set();
 let unsubAll = null;
 let lastPush = 0;
-let latestPlayers = null; // dernier snapshot connu, pour replay au subscribe
+let latestPlayers = null;
 const PUSH_THROTTLE_MS = 250;
 
 function ensureInit() {
@@ -40,16 +40,18 @@ function ensureInit() {
 
 // ─── La Botaniste Rebelle — injection déterministe ─────────────────────────────
 //
-// Grand triangle A → B → C → A couvrant la quasi-totalité de la map.
-// La position est calculable à tout instant depuis `now` sans état persistant.
+// Triangle centré sur la zone terrestre (1000, 1000), rayon ~600 px :
 //
-const _B_MAP_W_PX  = 40 * 50; // 2000 px
-const _B_MAP_H_PX  = 40 * 50; // 2000 px
-const _B_SPEED     = 80;       // px/s, identique à SPEED_PX_PER_SEC
+//            A (1000, 400)
+//           /              \
+//          /                \
+//   C (480, 1300)  ────  B (1520, 1300)
+//
+const _B_SPEED = 80; // px/s, identique à SPEED_PX_PER_SEC
 
-const _B_A = { x: 0.1 * _B_MAP_W_PX, y: 0.1 * _B_MAP_H_PX }; // (200,  200)
-const _B_B = { x: 0.9 * _B_MAP_W_PX, y: 0.1 * _B_MAP_H_PX }; // (1800, 200)
-const _B_C = { x: 0.5 * _B_MAP_W_PX, y: 0.9 * _B_MAP_H_PX }; // (1000, 1800)
+const _B_A = { x: 1000, y:  400 }; // haut-centre
+const _B_B = { x: 1520, y: 1300 }; // bas-droite
+const _B_C = { x:  480, y: 1300 }; // bas-gauche
 
 const _B_DIST_AB    = Math.hypot(_B_B.x - _B_A.x, _B_B.y - _B_A.y);
 const _B_DIST_BC    = Math.hypot(_B_C.x - _B_B.x, _B_C.y - _B_B.y);
@@ -60,9 +62,9 @@ const _B_FRAC_AB    = _B_DIST_AB / _B_DIST_TOTAL;
 const _B_FRAC_BC    = _B_DIST_BC / _B_DIST_TOTAL;
 
 const _B_SEGMENTS = [
-  { from: _B_A, to: _B_B, dist: _B_DIST_AB, fracStart: 0,                      fracEnd: _B_FRAC_AB                },
-  { from: _B_B, to: _B_C, dist: _B_DIST_BC, fracStart: _B_FRAC_AB,             fracEnd: _B_FRAC_AB + _B_FRAC_BC  },
-  { from: _B_C, to: _B_A, dist: _B_DIST_CA, fracStart: _B_FRAC_AB + _B_FRAC_BC, fracEnd: 1                       },
+  { from: _B_A, to: _B_B, dist: _B_DIST_AB, fracStart: 0,                       fracEnd: _B_FRAC_AB                },
+  { from: _B_B, to: _B_C, dist: _B_DIST_BC, fracStart: _B_FRAC_AB,              fracEnd: _B_FRAC_AB + _B_FRAC_BC  },
+  { from: _B_C, to: _B_A, dist: _B_DIST_CA, fracStart: _B_FRAC_AB + _B_FRAC_BC, fracEnd: 1                        },
 ];
 
 function _botaniste_computeState(now) {
@@ -71,13 +73,11 @@ function _botaniste_computeState(now) {
 
   const seg = _B_SEGMENTS.find((s) => phase < s.fracEnd) || _B_SEGMENTS[_B_SEGMENTS.length - 1];
 
-  const fracInSeg = (phase - seg.fracStart) / (seg.fracEnd - seg.fracStart);
-  const x         = seg.from.x + (seg.to.x - seg.from.x) * fracInSeg;
-  const y         = seg.from.y + (seg.to.y - seg.from.y) * fracInSeg;
+  const fracInSeg  = (phase - seg.fracStart) / (seg.fracEnd - seg.fracStart);
+  const x          = seg.from.x + (seg.to.x - seg.from.x) * fracInSeg;
+  const y          = seg.from.y + (seg.to.y - seg.from.y) * fracInSeg;
 
   const durationMs = Math.round((seg.dist / _B_SPEED) * 1000);
-  // startTs recalé : elapsed = now - startTs = fracInSeg * durationMs
-  // → frac côté client = fracInSeg ∈ [0, 1) → animation immédiate
   const startTs    = now - Math.round(fracInSeg * durationMs);
   const remainMs   = Math.round((1 - fracInSeg) * durationMs);
 
@@ -96,8 +96,7 @@ function _botaniste_computeState(now) {
 async function injectBotaniste() {
   const now   = Date.now();
   const state = _botaniste_computeState(now);
-  const botRef = ref(db, 'players/botaniste_rebelle');
-  await update(botRef, {
+  await update(ref(db, 'players/botaniste_rebelle'), {
     id:       'botaniste_rebelle',
     name:     'La Botaniste Rebelle',
     color:    '#5dca8b',
@@ -127,13 +126,11 @@ export async function joinMultiplayer({ playerId, name, color, x, y, outfit, ski
     hat:    hat    ?? 'none',
     lastSeen: Date.now(),
   });
-  // À la déconnexion : juste maj lastSeen, on garde la trace
   onDisconnect(myRef).update({ lastSeen: Date.now() - 60_000 });
 
   // Injection de la Botaniste (reset + position exacte sur le triangle)
   await injectBotaniste();
 
-  // Subscribe à tous les joueurs
   const allRef = ref(db, 'players');
   unsubAll = onValue(allRef, (snap) => {
     const data = snap.val() || {};
@@ -151,7 +148,6 @@ export function updateMyPosition(x, y) {
   update(myRef, { x, y, lastSeen: Date.now() }).catch(() => {});
 }
 
-// Annonce un trajet : les autres clients pourront afficher la trajectoire
 export function announceMove({ from, to, startTs, durationMs }) {
   if (!myRef) return;
   update(myRef, {
