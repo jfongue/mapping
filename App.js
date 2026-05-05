@@ -1110,10 +1110,10 @@ export default function App() {
                             </Animated.View>
                             {!online && <SleepyZzz x={e.x} y={e.y} />}
                             <Animated.Text
-                              numberOfLines={1}
+                              numberOfLines={2}
                               style={[styles.otherPlayerLabel, {
                                 transform: [
-                                  { translateX: Animated.subtract(e.x, 50) },
+                                  { translateX: Animated.subtract(e.x, 60) },
                                   { translateY: Animated.add(e.y, 22) },
                                 ],
                               }]}
@@ -1311,9 +1311,10 @@ const styles = StyleSheet.create({
   },
   otherPlayerLabel: {
     position: 'absolute',
-    left: 0, top: 0, width: 100,
+    left: 0, top: 0, width: 120,
     textAlign: 'center',
     color: '#fff', fontSize: 11, fontWeight: '600',
+    lineHeight: 14,
     textShadowColor: 'rgba(0,0,0,0.7)',
     textShadowRadius: 3,
   },
