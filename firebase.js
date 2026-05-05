@@ -37,19 +37,23 @@ function ensureInit() {
   db = getDatabase(app);
 }
 
-export async function joinMultiplayer({ playerId, name, color, x, y }) {
+export async function joinMultiplayer({ playerId, name, color, x, y, outfit, skin, hair, hat }) {
   ensureInit();
   myId = playerId;
   myRef = ref(db, `players/${playerId}`);
-  // Met à jour le profil + s'assure que x/y existent (sinon initialise)
-  // On utilise update + on prévoit fallback x/y via les params
   await update(myRef, {
     id: playerId, name, color,
-    x, y, // toujours définis (passés par App.js)
-    lastSeen: serverTimestamp(),
+    x, y,
+    outfit: outfit ?? 'gray',
+    skin:   skin   ?? 'light',
+    hair:   hair   ?? 'brown',
+    hat:    hat    ?? 'none',
+    lastSeen: Date.now(),
   });
   // À la déconnexion : juste maj lastSeen, on garde la trace
-  onDisconnect(myRef).update({ lastSeen: serverTimestamp() });
+  // serverTimestamp() est interdit dans onDisconnect (SDK web v9).
+  // On utilise un timestamp client suffisamment passé pour déclencher le seuil offline.
+  onDisconnect(myRef).update({ lastSeen: Date.now() - 60_000 });
 
   // Subscribe à tous les joueurs
   const allRef = ref(db, 'players');
@@ -65,7 +69,7 @@ export function updateMyPosition(x, y) {
   const now = Date.now();
   if (now - lastPush < PUSH_THROTTLE_MS) return;
   lastPush = now;
-  update(myRef, { x, y, lastSeen: serverTimestamp() }).catch(() => {});
+  update(myRef, { x, y, lastSeen: Date.now() }).catch(() => {});
 }
 
 // Annonce un trajet : les autres clients pourront afficher la trajectoire
@@ -73,13 +77,13 @@ export function announceMove({ from, to, startTs, durationMs }) {
   if (!myRef) return;
   update(myRef, {
     target: { fromX: from.x, fromY: from.y, toX: to.x, toY: to.y, startTs, durationMs },
-    lastSeen: serverTimestamp(),
+    lastSeen: Date.now(),
   }).catch(() => {});
 }
 
 export function updateMyProfile({ name, color }) {
   if (!myRef) return;
-  const patch = { lastSeen: serverTimestamp() };
+  const patch = { lastSeen: Date.now() };
   if (name !== undefined) patch.name = name;
   if (color !== undefined) patch.color = color;
   update(myRef, patch).catch(() => {});
@@ -87,7 +91,7 @@ export function updateMyProfile({ name, color }) {
 
 export function clearMyMove(finalX, finalY) {
   if (!myRef) return;
-  const patch = { target: null, lastSeen: serverTimestamp() };
+  const patch = { target: null, lastSeen: Date.now() };
   if (typeof finalX === 'number') patch.x = finalX;
   if (typeof finalY === 'number') patch.y = finalY;
   update(myRef, patch).catch(() => {});
@@ -144,7 +148,10 @@ export function subscribeLetters(cb) {
 
 export async function leaveMultiplayer() {
   if (myRef) {
-    await remove(myRef).catch(() => {});
+    // On ne supprime PAS le nœud : remove() + joinMultiplayer() en race condition
+    // provoque des états fantômes. On marque simplement lastSeen dans le passé
+    // pour que les autres clients considèrent ce joueur comme offline.
+    await update(myRef, { lastSeen: Date.now() - 60_000 }).catch(() => {});
     myRef = null;
   }
   if (unsubAll) {
