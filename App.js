@@ -96,13 +96,10 @@ export default function App() {
   const pinchStartScale = useRef(1);
 
   // ===== Recenter — nouvelle logique =====
-  // userHasPanned : vrai uniquement si l'utilisateur a déplacé la caméra d'au moins PAN_THRESHOLD_PX.
-  // On utilise un ref (pas un state) pour ne pas déclencher de re-render dans le handler de geste.
-  // showRecenterBtn est un state dérivé exposé au rendu.
   const userHasPanned = useRef(false);
   const [showRecenterBtn, setShowRecenterBtn] = useState(false);
   const followRafId = useRef(null);
-  const isInitialCenter = useRef(false); // true une fois le centrage initial fait
+  const isInitialCenter = useRef(false);
 
   // ===== Perso =====
   const [pos, setPos] = useState(SPAWN);
@@ -152,7 +149,6 @@ export default function App() {
   // ===== Path en cours =====
   const activePathRef = useRef(null);
   const [frozenActivePath, setFrozenActivePath] = useState(null);
-  // Distance déjà parcourue le long du chemin actif (pour effacer les dots passés).
   const [consumedDist, setConsumedDist] = useState(0);
   const lastConsumedTick = useRef(0);
 
@@ -170,12 +166,11 @@ export default function App() {
   const totalY = Animated.add(ty, dy);
   const totalScale = Animated.multiply(baseScale, pinchScale);
 
+  // Listener id pour la compensation live du pivot pinch
+  const pinchListenerId = useRef(null);
+
   // === HELPERS RECENTER ===
 
-  /**
-   * Calcule les valeurs tx/ty nécessaires pour centrer le perso à l'écran.
-   * Tient compte du scale courant et du transform-origin RN (centre du View map).
-   */
   const computeCenteredOffset = (charX, charY, vw, vh, s) => {
     const cx = MAP_W_PX / 2;
     const cy = MAP_H_PX / 2;
@@ -185,10 +180,6 @@ export default function App() {
     };
   };
 
-  /**
-   * Marque l'utilisateur comme ayant pané : stoppe le follow loop.
-   * Le bouton recenter est piloté indépendamment par la distance à l'écran.
-   */
   const markUserHasPanned = () => {
     if (userHasPanned.current) return;
     userHasPanned.current = true;
@@ -196,8 +187,6 @@ export default function App() {
   };
 
   // === FOLLOW LOOP ===
-  // Quand l'utilisateur n'a pas pané, la caméra suit le perso en mouvement
-  // via requestAnimationFrame (JS-driven, pas de useNativeDriver ici).
 
   const stopFollowLoop = () => {
     if (followRafId.current) {
@@ -224,7 +213,6 @@ export default function App() {
     followRafId.current = requestAnimationFrame(loop);
   };
 
-  // Démarre/arrête le follow loop — uniquement en mode follow et hors recentrage.
   useEffect(() => {
     if (moving && !userHasPanned.current) {
       startFollowLoop();
@@ -334,8 +322,6 @@ export default function App() {
       if (entry.anim) entry.anim.stop();
 
       if (p.target) {
-        // Reconstruit le trajet en local : pathfinding déterministe sur la même tilemap.
-        // Firebase ne transporte que from/to + startTs/durationMs.
         const t = p.target;
         const fromTx = Math.floor(t.fromX / TILE_PX);
         const fromTy = Math.floor(t.fromY / TILE_PX);
@@ -349,18 +335,15 @@ export default function App() {
             x: c.x * TILE_PX + TILE_PX / 2,
             y: c.y * TILE_PX + TILE_PX / 2,
           }));
-          // Cale exactement les extrémités sur les coords envoyées
           samples[0] = { x: t.fromX, y: t.fromY };
           samples[samples.length - 1] = { x: t.toX, y: t.toY };
         } else {
-          // Fallback : ligne droite si pathfinding échoue
           samples = [
             { x: t.fromX, y: t.fromY },
             { x: t.toX, y: t.toY },
           ];
         }
 
-        // Distances cumulées
         const cum = [0];
         let total = 0;
         for (let i = 1; i < samples.length; i++) {
@@ -372,13 +355,11 @@ export default function App() {
         const frac = total > 0 ? Math.min(1, elapsed / t.durationMs) : 1;
 
         if (frac >= 1) {
-          // Déjà arrivé
           entry.x.setValue(t.toX);
           entry.y.setValue(t.toY);
           entry.anim = null;
         } else {
           const elapsedDist = frac * total;
-          // Trouve le segment courant
           let seg = 1;
           while (seg < cum.length && cum[seg] < elapsedDist) seg++;
           const a = samples[seg - 1];
@@ -390,7 +371,6 @@ export default function App() {
           entry.x.setValue(startX);
           entry.y.setValue(startY);
 
-          // Construit la séquence : fin du segment courant + segments restants
           const steps = [];
           const firstSegRemaining = segLen * (1 - tInSeg);
           if (firstSegRemaining > 0) {
@@ -497,8 +477,6 @@ export default function App() {
     return () => loop.stop();
   }, [moving]);
 
-  // (Pointillés animés supprimés — DottedTrail statique, plus performant.)
-
   // Respiration douce offline
   useEffect(() => {
     let cancelled = false;
@@ -563,7 +541,6 @@ export default function App() {
   const onPanStateChange = (e) => {
     const { state, translationX, translationY } = e.nativeEvent;
 
-    // Détecte si le user a vraiment pané (dépassement du seuil)
     if (state === State.ACTIVE || state === State.END || state === State.CANCELLED) {
       const dist = Math.sqrt(translationX * translationX + translationY * translationY);
       if (dist >= PAN_THRESHOLD_PX) {
@@ -583,13 +560,15 @@ export default function App() {
     }
   };
 
+  // onPinchGesture : on N'utilise plus Animated.event pour piloter pinchScale directement,
+  // car RN scale autour du centre du View. On capture le focal point et on gère tout dans
+  // onPinchStateChange + un listener JS qui compense tx/ty en temps réel.
   const onPinchGesture = Animated.event(
     [{ nativeEvent: { scale: pinchScale } }],
     { useNativeDriver: true }
   );
 
-  // Snapshot du point map sous le focal point (centre entre les 2 doigts) au début du pinch,
-  // pour recoller la caméra à la fin et que le zoom paraisse pivoter autour de ce point.
+  // Snapshot du point map sous le focal point au début du pinch.
   const pinchAnchor = useRef({ mapX: 0, mapY: 0, focalX: 0, focalY: 0 });
 
   const onPinchStateChange = (e) => {
@@ -597,41 +576,59 @@ export default function App() {
 
     if (state === State.BEGAN) {
       markUserHasPanned();
-      // Sauvegarde le scale courant au début du geste pour éviter l'accumulation
-      // d'erreur avec gestureScale (qui repart de 1 à chaque nouveau BEGAN).
       pinchStartScale.current = lastScale.current;
 
       const s = lastScale.current;
       const cx = MAP_W_PX / 2;
       const cy = MAP_H_PX / 2;
-      // Utilise le point focal réel (centre entre les 2 doigts) plutôt que le centre écran.
       const focX = focalX ?? (viewport.w || SCREEN_W) / 2;
       const focY = focalY ?? (viewport.h || SCREEN_H) / 2;
+
+      // Point de la map sous le focal point
       pinchAnchor.current = {
         mapX: (focX - lastOffset.current.x - cx * (1 - s)) / s,
         mapY: (focY - lastOffset.current.y - cy * (1 - s)) / s,
         focalX: focX,
         focalY: focY,
       };
+
+      // Listener live : à chaque tick du geste pinch, on recalcule tx/ty pour que
+      // le point focal reste fixe à l'écran pendant que RN scale autour du centre du View.
+      // Sans cette compensation, RN scale autour du centre de la map → dérive visuelle.
+      if (pinchListenerId.current !== null) {
+        pinchScale.removeListener(pinchListenerId.current);
+      }
+      pinchListenerId.current = pinchScale.addListener(({ value: liveGestureScale }) => {
+        const liveScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, pinchStartScale.current * liveGestureScale));
+        const cx2 = MAP_W_PX / 2;
+        const cy2 = MAP_H_PX / 2;
+        const { mapX, mapY, focalX: fX, focalY: fY } = pinchAnchor.current;
+        const newTx = fX - cx2 * (1 - liveScale) - mapX * liveScale;
+        const newTy = fY - cy2 * (1 - liveScale) - mapY * liveScale;
+        tx.setValue(newTx);
+        ty.setValue(newTy);
+        // Mise à jour de lastOffset en live pour que le pan suivant parte du bon endroit
+        lastOffset.current = { x: newTx, y: newTy };
+      });
     }
 
     if (state === State.END || state === State.CANCELLED) {
+      // Retire le listener live
+      if (pinchListenerId.current !== null) {
+        pinchScale.removeListener(pinchListenerId.current);
+        pinchListenerId.current = null;
+      }
+
       let next = pinchStartScale.current * gestureScale;
       next = Math.max(MIN_SCALE, Math.min(MAX_SCALE, next));
       lastScale.current = next;
       baseScale.setValue(next);
       pinchScale.setValue(1);
 
-      const cx = MAP_W_PX / 2;
-      const cy = MAP_H_PX / 2;
-      // Recale sur le focal point capturé au BEGAN (cohérence pivot BEGAN → END)
-      const focX = pinchAnchor.current.focalX;
-      const focY = pinchAnchor.current.focalY;
-      const newTx = focX - cx * (1 - next) - pinchAnchor.current.mapX * next;
-      const newTy = focY - cy * (1 - next) - pinchAnchor.current.mapY * next;
-      lastOffset.current = { x: newTx, y: newTy };
-      tx.setValue(newTx);
-      ty.setValue(newTy);
+      // À ce stade lastOffset.current a déjà été mis à jour en temps réel par le listener.
+      // On s'assure juste que tx/ty et baseScale sont cohérents.
+      tx.setValue(lastOffset.current.x);
+      ty.setValue(lastOffset.current.y);
     }
   };
 
@@ -660,8 +657,6 @@ export default function App() {
     return best;
   };
 
-  // Cherche un message non-perso à proximité d'un point (px, py).
-  // Utilisé pour détecter si une destination correspond à un ramassage de message.
   const findLetterNearPoint = (px, py, radius = LETTER_PICKUP_RADIUS) => {
     let best = null, bestD = radius;
     for (const l of letters) {
@@ -672,7 +667,6 @@ export default function App() {
     return best;
   };
 
-  // Cherche un autre joueur à proximité d'un point. Sert à libeller la preview.
   const findPlayerNearPoint = (px, py, radius = PLAYER_NEAR_RADIUS) => {
     let best = null, bestD = radius;
     for (const p of otherPlayers) {
@@ -695,7 +689,6 @@ export default function App() {
       if (d > 30) setPendingTarget(null);
       return;
     }
-    // Si tap proche d'un message non-perso : on cible directement le message
     const nearLetter = findLetterNearPoint(t.x, t.y, 40);
     let goalX = t.x, goalY = t.y;
     if (nearLetter) {
@@ -710,9 +703,7 @@ export default function App() {
     if (!cellPath) return;
     const { samples, length } = buildStraightPath(cellPath, pos);
     const finalPx = samples[samples.length - 1];
-    // Détecte un message à ramasser à l'arrivée
     const pickupLetter = nearLetter || findLetterNearPoint(finalPx.x, finalPx.y);
-    // Détecte un joueur proche de la destination (libellé preview uniquement)
     const nearPlayer = pickupLetter ? null : findPlayerNearPoint(finalPx.x, finalPx.y);
     setPendingTarget({
       ...finalPx, samples, length,
@@ -753,7 +744,6 @@ export default function App() {
     }
   };
 
-  // Lettre à ramasser à l'arrivée (référence stable pendant le mouvement)
   const pendingPickupRef = useRef(null);
 
   const confirmMove = () => {
@@ -770,7 +760,6 @@ export default function App() {
 
   const cancelMove = () => setPendingTarget(null);
 
-  // Arrête le voyage en cours, ferme proprement les listeners et fige le perso à sa position courante.
   const stopMove = () => {
     if (currentAnim.current) currentAnim.current.stop();
     if (progressListenerId.current && progressRef.current) {
@@ -806,7 +795,6 @@ export default function App() {
 
     const progress = new Animated.Value(0);
     progressRef.current = progress;
-    // Tick de mise à jour des dots consommés : toutes les ~26 px (= 1 dot)
     const DOT_TICK = 26;
     progressListenerId.current = progress.addListener(({ value }) => {
       const p = sampleAt(samples, value);
@@ -850,11 +838,9 @@ export default function App() {
     currentAnim.current = null;
     moveTarget.current = null;
 
-    // Auto-ramassage du message si la cible était proche d'une lettre
     const pickup = pendingPickupRef.current;
     pendingPickupRef.current = null;
     if (pickup && pickup.id) {
-      // Vérifie qu'elle est encore là (pas déjà ramassée par un autre joueur)
       const stillThere = letters.some((l) => l.id === pickup.id);
       if (stillThere) {
         setInventory((prev) => {
@@ -912,11 +898,6 @@ export default function App() {
     });
   };
 
-  /**
-   * Recentre la caméra sur le personnage avec une animation fluide.
-   * Lit la position caméra réelle (lastOffset + delta geste en cours) pour
-   * éviter tout saut visuel si l'user a le doigt posé pendant le tap.
-   */
   const recenter = () => {
     const vw = viewport.w || SCREEN_W;
     const vh = viewport.h || SCREEN_H;
@@ -924,13 +905,11 @@ export default function App() {
     const charX = animX.__getValue();
     const charY = animY.__getValue();
 
-    // Position caméra actuelle (stable + delta live)
     const curOffX = lastOffset.current.x + dx.__getValue();
     const curOffY = lastOffset.current.y + dy.__getValue();
 
     const { x: targetX, y: targetY } = computeCenteredOffset(charX, charY, vw, vh, s);
 
-    // Commit le delta live dans lastOffset avant d'animer
     lastOffset.current = { x: curOffX, y: curOffY };
     dx.setValue(0);
     dy.setValue(0);
@@ -942,9 +921,7 @@ export default function App() {
       Animated.timing(ty, { toValue: targetY, duration: 350, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
     ]).start(() => {
       lastOffset.current = { x: targetX, y: targetY };
-      // Repasse en mode "suivi" : efface le flag pané
       userHasPanned.current = false;
-      // Si le perso est encore en mouvement, démarre le follow loop
       if (moving) startFollowLoop();
     });
   };
@@ -1024,7 +1001,7 @@ export default function App() {
                         />
                       )}
 
-                      {/* Chemin actif figé : trail un peu plus discret. Les dots passés sont effacés. */}
+                      {/* Chemin actif figé */}
                       {frozenActivePath && (
                         <DottedTrail
                           samples={frozenActivePath}
@@ -1139,7 +1116,7 @@ export default function App() {
                         );
                       })}
 
-                      {/* Perso (même taille que les autres) */}
+                      {/* Perso */}
                       <Animated.View style={{
                         position: 'absolute',
                         width: 50, height: 50,
@@ -1172,7 +1149,7 @@ export default function App() {
           <TravelingBar eta={eta} onStop={stopMove} />
         )}
 
-        {/* Bouton recenter — visible uniquement si l'utilisateur a réellement pané */}
+        {/* Bouton recenter */}
         {showRecenterBtn && (
           <TouchableOpacity style={styles.recenterBtn} onPress={recenter} activeOpacity={0.75}>
             <Crosshair size={22} color={THEME.text} strokeWidth={2.2} />
@@ -1217,7 +1194,7 @@ export default function App() {
           </View>
         )}
 
-        {/* Bouton Inventaire (top-right, à côté de settings) */}
+        {/* Bouton Inventaire */}
         <TouchableOpacity style={styles.inventoryBtn} onPress={() => setInventoryOpen(true)} activeOpacity={0.8}>
           <Backpack size={22} color={THEME.text} strokeWidth={2.2} />
           {unreadCount > 0 && (
