@@ -1232,7 +1232,7 @@ const styles = StyleSheet.create({
   },
   iconText: { color: THEME.text, fontSize: 22, fontWeight: '700' },
   speedBtn: {
-    position: 'absolute', bottom: 40, left: 16,
+    position: 'absolute', bottom: 160, left: 16,
     paddingHorizontal: 16, paddingVertical: 10, borderRadius: 22,
     backgroundColor: 'rgba(0,0,0,0.7)', minWidth: 80, alignItems: 'center',
   },
