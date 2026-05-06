@@ -172,6 +172,11 @@ export default function App() {
   const [consumedDist, setConsumedDist] = useState(0);
   const lastConsumedTick = useRef(0);
 
+  // Récapitulatif de fin de trajet
+  const [tripSummary, setTripSummary] = useState(null);
+  const tripStartedAtRef = useRef(null);
+  const tripSummaryTimeoutRef = useRef(null);
+
   const globalNowRef = useRef(Date.now());
 
   const dx = useRef(new Animated.Value(0)).current;
@@ -530,6 +535,13 @@ export default function App() {
     return () => { if (speedTimer.current) clearTimeout(speedTimer.current); };
   }, []);
 
+  // Nettoyage du timer du récapitulatif au démontage
+  useEffect(() => {
+    return () => {
+      if (tripSummaryTimeoutRef.current) clearTimeout(tripSummaryTimeoutRef.current);
+    };
+  }, []);
+
   const onPanGesture = Animated.event(
     [{ nativeEvent: { translationX: dx, translationY: dy } }],
     { useNativeDriver: true }
@@ -731,6 +743,19 @@ export default function App() {
   const progressRef = useRef(null);
   const progressListenerId = useRef(null);
 
+  // Affiche le récapitulatif de fin de trajet pendant 4 secondes
+  const showTripSummary = (distancePx, durationMs) => {
+    if (tripSummaryTimeoutRef.current) clearTimeout(tripSummaryTimeoutRef.current);
+    setTripSummary({
+      distancePx: Math.max(0, Math.round(distancePx || 0)),
+      durationMs: Math.max(0, Math.round(durationMs || 0)),
+    });
+    tripSummaryTimeoutRef.current = setTimeout(() => {
+      setTripSummary(null);
+      tripSummaryTimeoutRef.current = null;
+    }, 4000);
+  };
+
   const startMoveAlongCurve = (samples, length) => {
     if (!samples || samples.length < 2) return;
     const baseDuration = Math.max(
@@ -740,6 +765,8 @@ export default function App() {
     const dur = baseDuration / speedMul;
     moveTarget.current = samples[samples.length - 1];
     moveBaseDuration.current = baseDuration;
+    tripStartedAtRef.current = Date.now();
+    setTripSummary(null);
     setMoving(true);
     const etaMs = Date.now() + dur;
     setEta(etaMs);
@@ -782,6 +809,16 @@ export default function App() {
   };
 
   const finalizeArrival = (final) => {
+    // Calcul du récapitulatif avant de réinitialiser les refs
+    const pathAtArrival = activePathRef.current;
+    const tripDistancePx = pathAtArrival && pathAtArrival.length >= 2
+      ? pathAtArrival.reduce((sum, point, index, arr) => {
+          if (index === 0) return sum;
+          return sum + Math.hypot(point.x - arr[index - 1].x, point.y - arr[index - 1].y);
+        }, 0)
+      : 0;
+    const tripDurationMs = tripStartedAtRef.current ? Date.now() - tripStartedAtRef.current : 0;
+
     animX.setValue(final.x);
     animY.setValue(final.y);
     setPos({ x: final.x, y: final.y });
@@ -795,6 +832,13 @@ export default function App() {
     lastConsumedTick.current = 0;
     currentAnim.current = null;
     moveTarget.current = null;
+    tripStartedAtRef.current = null;
+
+    // Affiche le récapitulatif si le trajet avait une distance mesurable
+    if (tripDistancePx > 0 || tripDurationMs > 0) {
+      showTripSummary(tripDistancePx, tripDurationMs);
+    }
+
     const pickup = pendingPickupRef.current;
     pendingPickupRef.current = null;
     if (pickup && pickup.id) {
@@ -1099,6 +1143,14 @@ export default function App() {
 
         {moving && <TravelingBar eta={eta} onStop={stopMove} />}
 
+        {tripSummary && (
+          <View style={styles.tripSummaryBar} pointerEvents="none">
+            <Text style={styles.tripSummaryText}>
+              Trajet terminé · {formatMeters(tripSummary.distancePx)} · {formatDuration(Math.round(tripSummary.durationMs / 1000))}
+            </Text>
+          </View>
+        )}
+
         {showRecenterBtn && (
           <TouchableOpacity style={styles.recenterBtn} onPress={recenter} activeOpacity={0.75}>
             <Crosshair size={22} color={THEME.text} strokeWidth={2.2} />
@@ -1275,5 +1327,26 @@ const styles = StyleSheet.create({
     backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border,
     justifyContent: 'center', alignItems: 'center',
     ...THEME.shadow, shadowRadius: 12,
+  },
+  tripSummaryBar: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 28,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: THEME.radiusLg,
+    backgroundColor: THEME.card,
+    borderWidth: 1.5,
+    borderColor: THEME.border,
+    alignItems: 'center',
+    ...THEME.shadow,
+    shadowRadius: 12,
+  },
+  tripSummaryText: {
+    color: THEME.text,
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'center',
   },
 });
