@@ -51,4 +51,4 @@ export const SAVE_KEY = '@treasureProto.pos.v3';
 export const PROFILE_KEY = '@treasureProto.profile.v1';
 
 // === Spawn ===
-export const SPAWN = { x: MAP_SIZE / 2, y: MAP_SIZE / 2 };
+export const SPAWN = { x: 29, y: 29 };
