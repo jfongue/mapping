@@ -8,8 +8,6 @@ import { ScrollText, Trash2, ChevronDown, ChevronRight } from 'lucide-react-nati
 import { THEME } from '../src/theme';
 
 // ─── Système de niveaux ───────────────────────────────────────────────────────
-// La distance est exprimée en px (vitesse 40px/s).
-// On la convertit en "lieues" fantasy pour l'affichage (1 lieue = 400 px).
 const PX_PER_LIEUE = 400;
 
 const LEVELS = [
@@ -42,7 +40,6 @@ function getLevelInfo(totalDistancePx) {
   return { current, next, lieues: Math.floor(lieues), progress: Math.min(1, Math.max(0, progress)) };
 }
 
-// Bandeau de niveau avec barre de progression animée
 function LevelBanner({ totalDistancePx }) {
   const { current, next, lieues, progress } = getLevelInfo(totalDistancePx);
   const barAnim = useRef(new Animated.Value(0)).current;
@@ -62,7 +59,6 @@ function LevelBanner({ totalDistancePx }) {
 
   return (
     <View style={lvlStyles.container}>
-      {/* Ligne du haut : niveau + titre + lieues */}
       <View style={lvlStyles.topRow}>
         <View style={lvlStyles.badge}>
           <Text style={lvlStyles.badgeLvl}>Niv.</Text>
@@ -79,13 +75,9 @@ function LevelBanner({ totalDistancePx }) {
           <Text style={lvlStyles.crown}>👑</Text>
         )}
       </View>
-
-      {/* Barre de progression */}
       <View style={lvlStyles.track}>
         <Animated.View style={[lvlStyles.fill, { width: barWidth }]} />
       </View>
-
-      {/* Étiquettes min/max */}
       {next && (
         <View style={lvlStyles.labels}>
           <Text style={lvlStyles.labelText}>{current.minLieues}</Text>
@@ -103,7 +95,7 @@ const lvlStyles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
     padding: 10,
-    marginBottom: 12,
+    marginBottom: 10,
   },
   topRow: {
     flexDirection: 'row',
@@ -111,62 +103,28 @@ const lvlStyles = StyleSheet.create({
     marginBottom: 7,
   },
   badge: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 42, height: 42, borderRadius: 21,
     backgroundColor: THEME.accent,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: THEME.accentDark,
+    justifyContent: 'center', alignItems: 'center',
+    borderWidth: 2, borderColor: THEME.accentDark,
   },
   badgeLvl: {
-    fontSize: 8,
-    fontWeight: '700',
-    color: THEME.textOnDark,
-    letterSpacing: 0.5,
-    lineHeight: 10,
+    fontSize: 8, fontWeight: '700', color: THEME.textOnDark,
+    letterSpacing: 0.5, lineHeight: 10,
   },
   badgeNum: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: THEME.textOnDark,
-    lineHeight: 20,
+    fontSize: 18, fontWeight: '800', color: THEME.textOnDark, lineHeight: 20,
   },
-  title: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: THEME.text,
-  },
-  sub: {
-    fontSize: 10,
-    color: THEME.textMuted,
-    marginTop: 1,
-  },
-  crown: {
-    fontSize: 20,
-    marginLeft: 6,
-  },
+  title: { fontSize: 14, fontWeight: '700', color: THEME.text },
+  sub: { fontSize: 10, color: THEME.textMuted, marginTop: 1 },
+  crown: { fontSize: 20, marginLeft: 6 },
   track: {
-    height: 8,
-    backgroundColor: 'rgba(58,38,20,0.15)',
-    borderRadius: 4,
-    overflow: 'hidden',
+    height: 8, backgroundColor: 'rgba(58,38,20,0.15)',
+    borderRadius: 4, overflow: 'hidden',
   },
-  fill: {
-    height: '100%',
-    backgroundColor: THEME.accent,
-    borderRadius: 4,
-  },
-  labels: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 3,
-  },
-  labelText: {
-    fontSize: 9,
-    color: THEME.textMuted,
-  },
+  fill: { height: '100%', backgroundColor: THEME.accent, borderRadius: 4 },
+  labels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 3 },
+  labelText: { fontSize: 9, color: THEME.textMuted },
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -200,7 +158,6 @@ export default function InventoryModal({ items, totalDistancePx, onClose, onMark
     if (l.unread) onMarkRead(l.id);
   };
 
-  // Regroupement par auteur
   const groupsMap = {};
   for (const l of (items || [])) {
     const key = l.authorId || 'unknown';
@@ -232,13 +189,14 @@ export default function InventoryModal({ items, totalDistancePx, onClose, onMark
         <View style={StyleSheet.absoluteFill} />
       </TouchableWithoutFeedback>
       <View style={styles.card}>
+
+        {/* ── Bandeau niveau (au-dessus de tout) ── */}
+        <LevelBanner totalDistancePx={totalDistancePx} />
+
         <Text style={styles.kicker}>MESSAGERIE</Text>
         <Text style={styles.title}>
           {total === 0 ? 'Aucun message' : `${total} message${total > 1 ? 's' : ''}`}
         </Text>
-
-        {/* ── Bandeau niveau ── */}
-        <LevelBanner totalDistancePx={totalDistancePx} />
 
         {total === 0 ? (
           <Text style={styles.empty}>
