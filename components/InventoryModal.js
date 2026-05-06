@@ -1,13 +1,175 @@
 // Modal Inventaire : liste des messages ramassés, regroupés par auteur.
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
-  StyleSheet, View, Text, ScrollView,
+  StyleSheet, View, Text, ScrollView, Animated,
   TouchableWithoutFeedback, TouchableOpacity,
 } from 'react-native';
 import { ScrollText, Trash2, ChevronDown, ChevronRight } from 'lucide-react-native';
 import { THEME } from '../src/theme';
 
-// Formate un timestamp (ms) en date lisible : "Aujourd'hui 14:32" ou "12 mai 14:32"
+// ─── Système de niveaux ───────────────────────────────────────────────────────
+// La distance est exprimée en px (vitesse 40px/s).
+// On la convertit en "lieues" fantasy pour l'affichage (1 lieue = 400 px).
+const PX_PER_LIEUE = 400;
+
+const LEVELS = [
+  { level: 1,  title: 'Novice',          minLieues: 0    },
+  { level: 2,  title: 'Marcheur',        minLieues: 5    },
+  { level: 3,  title: 'Explorateur',     minLieues: 15   },
+  { level: 4,  title: 'Aventurier',      minLieues: 35   },
+  { level: 5,  title: 'Éclaireur',       minLieues: 70   },
+  { level: 6,  title: 'Ranger',          minLieues: 120  },
+  { level: 7,  title: 'Cartographe',     minLieues: 200  },
+  { level: 8,  title: 'Pionnier',        minLieues: 320  },
+  { level: 9,  title: 'Légende',         minLieues: 500  },
+  { level: 10, title: 'Maître du Monde', minLieues: 750  },
+];
+
+function getLevelInfo(totalDistancePx) {
+  const lieues = (totalDistancePx || 0) / PX_PER_LIEUE;
+  let current = LEVELS[0];
+  let next = LEVELS[1];
+  for (let i = LEVELS.length - 1; i >= 0; i--) {
+    if (lieues >= LEVELS[i].minLieues) {
+      current = LEVELS[i];
+      next = LEVELS[i + 1] || null;
+      break;
+    }
+  }
+  const progress = next
+    ? (lieues - current.minLieues) / (next.minLieues - current.minLieues)
+    : 1;
+  return { current, next, lieues: Math.floor(lieues), progress: Math.min(1, Math.max(0, progress)) };
+}
+
+// Bandeau de niveau avec barre de progression animée
+function LevelBanner({ totalDistancePx }) {
+  const { current, next, lieues, progress } = getLevelInfo(totalDistancePx);
+  const barAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(barAnim, {
+      toValue: progress,
+      duration: 700,
+      useNativeDriver: false,
+    }).start();
+  }, [progress]);
+
+  const barWidth = barAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0%', '100%'],
+  });
+
+  return (
+    <View style={lvlStyles.container}>
+      {/* Ligne du haut : niveau + titre + lieues */}
+      <View style={lvlStyles.topRow}>
+        <View style={lvlStyles.badge}>
+          <Text style={lvlStyles.badgeLvl}>Niv.</Text>
+          <Text style={lvlStyles.badgeNum}>{current.level}</Text>
+        </View>
+        <View style={{ flex: 1, marginLeft: 8 }}>
+          <Text style={lvlStyles.title}>{current.title}</Text>
+          <Text style={lvlStyles.sub}>
+            {lieues} lieue{lieues !== 1 ? 's' : ''} parcourue{lieues !== 1 ? 's' : ''}
+            {next ? ` · prochain : ${next.minLieues} lieues` : ' · Niveau max !'}
+          </Text>
+        </View>
+        {current.level === 10 && (
+          <Text style={lvlStyles.crown}>👑</Text>
+        )}
+      </View>
+
+      {/* Barre de progression */}
+      <View style={lvlStyles.track}>
+        <Animated.View style={[lvlStyles.fill, { width: barWidth }]} />
+      </View>
+
+      {/* Étiquettes min/max */}
+      {next && (
+        <View style={lvlStyles.labels}>
+          <Text style={lvlStyles.labelText}>{current.minLieues}</Text>
+          <Text style={lvlStyles.labelText}>{next.minLieues}</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+const lvlStyles = StyleSheet.create({
+  container: {
+    backgroundColor: '#f4e4bc',
+    borderRadius: THEME.radiusMd,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    padding: 10,
+    marginBottom: 12,
+  },
+  topRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 7,
+  },
+  badge: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: THEME.accent,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: THEME.accentDark,
+  },
+  badgeLvl: {
+    fontSize: 8,
+    fontWeight: '700',
+    color: THEME.textOnDark,
+    letterSpacing: 0.5,
+    lineHeight: 10,
+  },
+  badgeNum: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: THEME.textOnDark,
+    lineHeight: 20,
+  },
+  title: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: THEME.text,
+  },
+  sub: {
+    fontSize: 10,
+    color: THEME.textMuted,
+    marginTop: 1,
+  },
+  crown: {
+    fontSize: 20,
+    marginLeft: 6,
+  },
+  track: {
+    height: 8,
+    backgroundColor: 'rgba(58,38,20,0.15)',
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  fill: {
+    height: '100%',
+    backgroundColor: THEME.accent,
+    borderRadius: 4,
+  },
+  labels: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 3,
+  },
+  labelText: {
+    fontSize: 9,
+    color: THEME.textMuted,
+  },
+});
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 const formatDate = (ts) => {
   if (!ts) return '';
   const d = new Date(ts);
@@ -24,7 +186,8 @@ const formatDate = (ts) => {
   return `${d.getDate()} ${months[d.getMonth()]} ${hh}:${mm}`;
 };
 
-export default function InventoryModal({ items, onClose, onMarkRead, onDelete }) {
+// ─── Composant principal ──────────────────────────────────────────────────────
+export default function InventoryModal({ items, totalDistancePx, onClose, onMarkRead, onDelete }) {
   const [openId, setOpenId] = useState(null);
   const [collapsedAuthors, setCollapsedAuthors] = useState({});
 
@@ -56,10 +219,7 @@ export default function InventoryModal({ items, onClose, onMarkRead, onDelete })
     if (l.unread) groupsMap[key].unreadCount += 1;
   }
 
-  // Trier les groupes par date du dernier message (plus récent en premier)
   const groups = Object.values(groupsMap).sort((a, b) => b.lastAt - a.lastAt);
-
-  // Trier les messages à l'intérieur de chaque groupe (plus récent en premier)
   groups.forEach((g) => {
     g.messages.sort((a, b) => (b.pickedAt || 0) - (a.pickedAt || 0));
   });
@@ -77,17 +237,19 @@ export default function InventoryModal({ items, onClose, onMarkRead, onDelete })
           {total === 0 ? 'Aucun message' : `${total} message${total > 1 ? 's' : ''}`}
         </Text>
 
+        {/* ── Bandeau niveau ── */}
+        <LevelBanner totalDistancePx={totalDistancePx} />
+
         {total === 0 ? (
           <Text style={styles.empty}>
             Approche-toi d'un message sur la carte pour le ramasser.
           </Text>
         ) : (
-          <ScrollView style={{ maxHeight: 400 }} contentContainerStyle={{ paddingVertical: 4 }}>
+          <ScrollView style={{ maxHeight: 340 }} contentContainerStyle={{ paddingVertical: 4 }}>
             {groups.map((group) => {
               const isCollapsed = collapsedAuthors[group.authorId];
               return (
                 <View key={group.authorId} style={styles.group}>
-                  {/* En-tête de groupe auteur */}
                   <TouchableOpacity
                     style={styles.groupHeader}
                     onPress={() => toggleAuthor(group.authorId)}
@@ -111,7 +273,6 @@ export default function InventoryModal({ items, onClose, onMarkRead, onDelete })
                     }
                   </TouchableOpacity>
 
-                  {/* Messages du groupe */}
                   {!isCollapsed && group.messages.map((l) => {
                     const isOpen = openId === l.id;
                     return (
@@ -183,10 +344,7 @@ const styles = StyleSheet.create({
     fontSize: 13, color: THEME.textMuted,
     textAlign: 'center', paddingVertical: 22, fontStyle: 'italic',
   },
-  // Groupe auteur
-  group: {
-    marginBottom: 10,
-  },
+  group: { marginBottom: 10 },
   groupHeader: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     paddingVertical: 7, paddingHorizontal: 10,
@@ -202,7 +360,6 @@ const styles = StyleSheet.create({
   },
   badgeText: { color: '#fff', fontSize: 10, fontWeight: '800' },
   groupCount: { fontSize: 11, color: THEME.textMuted, marginRight: 2 },
-  // Item message
   item: {
     borderWidth: 1, borderColor: THEME.borderSoft,
     borderRadius: THEME.radiusMd,
@@ -227,8 +384,7 @@ const styles = StyleSheet.create({
   preview: { fontSize: 12, color: THEME.textMuted, marginTop: 2 },
   body: {
     fontSize: 14, color: THEME.text, fontStyle: 'italic',
-    lineHeight: 20, marginTop: 8,
-    paddingLeft: 38,
+    lineHeight: 20, marginTop: 8, paddingLeft: 38,
   },
   deleteBtn: { padding: 4 },
   close: {
