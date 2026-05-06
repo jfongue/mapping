@@ -1,11 +1,22 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   StyleSheet, View, Text, TextInput,
   TouchableWithoutFeedback, TouchableOpacity,
 } from 'react-native';
 import { THEME } from '../src/theme';
 
+const formatNow = () => {
+  const d = new Date();
+  const months = ['jan', 'fév', 'mar', 'avr', 'mai', 'jun',
+                   'jul', 'aoû', 'sep', 'oct', 'nov', 'déc'];
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}  •  ${hh}:${mm}`;
+};
+
 export default function LetterWriteModal({ value, setValue, onSend, onClose }) {
+  const dateLabel = useMemo(() => formatNow(), []);
+
   return (
     <View style={styles.overlay}>
       <TouchableWithoutFeedback onPress={onClose}>
@@ -14,6 +25,10 @@ export default function LetterWriteModal({ value, setValue, onSend, onClose }) {
       <View style={styles.card}>
         <Text style={styles.kicker}>LAISSER UNE LETTRE</Text>
         <Text style={styles.hint}>Elle restera ici jusqu'à ce qu'un autre joueur la lise.</Text>
+
+        {/* Date d'écriture */}
+        <Text style={styles.dateLabel}>🗓  {dateLabel}</Text>
+
         <TextInput
           value={value}
           onChangeText={setValue}
@@ -60,7 +75,12 @@ const styles = StyleSheet.create({
     fontWeight: '700', color: THEME.textMuted,
     textAlign: 'center',
   },
-  hint: { fontSize: 12, color: THEME.textMuted, textAlign: 'center', marginTop: 4, marginBottom: 14 },
+  hint: { fontSize: 12, color: THEME.textMuted, textAlign: 'center', marginTop: 4, marginBottom: 10 },
+  dateLabel: {
+    fontSize: 12, color: THEME.textMuted,
+    textAlign: 'center', marginBottom: 12,
+    fontStyle: 'italic',
+  },
   input: {
     borderWidth: 1.5, borderColor: THEME.borderSoft,
     backgroundColor: '#fffef0',
