@@ -97,6 +97,7 @@ import InventoryModal from './components/InventoryModal';
 import { ConfirmationBar, TravelingBar } from './components/TravelBars';
 import { AdventurerSprite } from './components/Adventurer';
 import { ScrollText, Settings, Crosshair, Backpack } from 'lucide-react-native';
+import { DEBUG_MESSAGES, DEBUG_MESSAGE_AUTHORS } from './src/debugMessages';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 const INIT_X = SCREEN_W / 2 - MAP_SIZE / 2;
@@ -853,6 +854,79 @@ export default function App() {
     });
   };
 
+  const centerOnPoint = (mapX, mapY) => {
+    const vw = viewport.w || SCREEN_W;
+    const vh = viewport.h || SCREEN_H;
+    const s = lastScale.current;
+    const cx = MAP_W_PX / 2;
+    const cy = MAP_H_PX / 2;
+    const targetX = vw / 2 - s * mapX - cx * (1 - s);
+    const targetY = vh / 2 - s * mapY - cy * (1 - s);
+    const curOffX = lastOffset.current.x + dx.__getValue();
+    const curOffY = lastOffset.current.y + dy.__getValue();
+    lastOffset.current = { x: curOffX, y: curOffY };
+    dx.setValue(0);
+    dy.setValue(0);
+    tx.setValue(curOffX);
+    ty.setValue(curOffY);
+    userHasPanned.current = true;
+    Animated.parallel([
+      Animated.timing(tx, { toValue: targetX, duration: 450, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(ty, { toValue: targetY, duration: 450, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+    ]).start(() => {
+      lastOffset.current = { x: targetX, y: targetY };
+    });
+  };
+
+  const findRandomWalkableTileNearPlayer = () => {
+    const originTx = Math.floor(pos.x / TILE_PX);
+    const originTy = Math.floor(pos.y / TILE_PX);
+    const MIN_R = 5;
+    const MAX_R = 15;
+    const candidates = [];
+    for (let dy2 = -MAX_R; dy2 <= MAX_R; dy2++) {
+      for (let dx2 = -MAX_R; dx2 <= MAX_R; dx2++) {
+        const dist = Math.max(Math.abs(dx2), Math.abs(dy2));
+        if (dist < MIN_R || dist > MAX_R) continue;
+        const nx = originTx + dx2;
+        const ny = originTy + dy2;
+        if (nx < 0 || nx >= MAP_W || ny < 0 || ny >= MAP_H) continue;
+        if (WALKABLE[TILES_DATA[ny * MAP_W + nx]]) {
+          candidates.push({ x: nx * TILE_PX + TILE_PX / 2, y: ny * TILE_PX + TILE_PX / 2 });
+        }
+      }
+    }
+    if (candidates.length === 0) return null;
+    return candidates[Math.floor(Math.random() * candidates.length)];
+  };
+
+  const handleDebugGenerateMessage = async () => {
+    if (!profile) return;
+    const dropPos = findRandomWalkableTileNearPlayer();
+    if (!dropPos) return;
+    const msgIndex = Math.floor(Math.random() * DEBUG_MESSAGES.length);
+    const text = DEBUG_MESSAGES[msgIndex];
+    // Choisir l'auteur selon l'index pour une bonne distribution
+    const authorIndex = msgIndex % DEBUG_MESSAGE_AUTHORS.length;
+    const author = DEBUG_MESSAGE_AUTHORS[authorIndex];
+    // Fermer les settings
+    setSettingsOpen(false);
+    try {
+      await dropLetter({
+        authorId: `debug_${author.name.toLowerCase()}`,
+        authorName: author.name,
+        authorColor: author.color,
+        x: dropPos.x,
+        y: dropPos.y,
+        text,
+      });
+      // Centrer la caméra sur le message généré
+      centerOnPoint(dropPos.x, dropPos.y);
+    } catch (e) {
+      console.warn('debug drop letter failed', e);
+    }
+  };
+
   const onSpeedPressIn = () => {
     setSpeedLvl(1);
     let lvl = 1;
@@ -1076,7 +1150,8 @@ export default function App() {
         {settingsOpen && (
           <SettingsModal profile={profile} draftName={draftName} setDraftName={setDraftName}
             onPatch={saveProfile} debugEnabled={debugEnabled} onToggleDebug={onToggleDebug}
-            onClose={() => setSettingsOpen(false)} onValidateName={validateName} />
+            onClose={() => setSettingsOpen(false)} onValidateName={validateName}
+            onDebugGenerateMessage={handleDebugGenerateMessage} />
         )}
         {selectedPlayer && <PlayerDetailModal player={selectedPlayer} onClose={() => setSelectedPlayer(null)} />}
         {letterWriteOpen && (
