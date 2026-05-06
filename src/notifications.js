@@ -1,23 +1,19 @@
 // src/notifications.js
 import * as Notifications from 'expo-notifications';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
+// Retourne shouldShowAlert: false quand l'app est active (foreground),
+// true uniquement en background / fermée.
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
+    shouldShowAlert: AppState.currentState !== 'active',
+    shouldPlaySound: AppState.currentState !== 'active',
     shouldSetBadge: false,
   }),
 });
 
 let _pendingNotifId = null;
-let _foregroundSub = null;
 
-/**
- * À appeler une fois au montage de App.js via useEffect.
- * Enregistre aussi un listener foreground qui affiche une bannière native
- * même quand l'app est ouverte (contourne le bug Expo Go iOS).
- */
 export async function requestNotificationPermissions() {
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync('arrival', {
@@ -28,21 +24,9 @@ export async function requestNotificationPermissions() {
     });
   }
   const { granted } = await Notifications.getPermissionsAsync();
-  if (!granted) {
-    const { granted: g2 } = await Notifications.requestPermissionsAsync();
-    if (!g2) return false;
-  }
-
-  // Listener foreground : re-présente la notif via addNotificationReceivedListener
-  // quand l'app est au premier plan (setNotificationHandler suffit sur Android,
-  // mais ce listener explicite corrige iOS / Expo Go).
-  if (!_foregroundSub) {
-    _foregroundSub = Notifications.addNotificationReceivedListener(() => {
-      // Le handler défini plus haut (shouldShowAlert: true) fait le travail ;
-      // ce listener existe uniquement pour forcer Expo Go iOS à l'honorer.
-    });
-  }
-  return true;
+  if (granted) return true;
+  const { granted: g2 } = await Notifications.requestPermissionsAsync();
+  return g2;
 }
 
 /**
@@ -75,10 +59,4 @@ export async function cancelArrivalNotification() {
   if (!_pendingNotifId) return;
   try { await Notifications.cancelScheduledNotificationAsync(_pendingNotifId); } catch (_) {}
   _pendingNotifId = null;
-}
-
-/** À appeler dans le cleanup de useEffect si le composant est démonté. */
-export function removeNotificationListeners() {
-  _foregroundSub?.remove();
-  _foregroundSub = null;
 }
