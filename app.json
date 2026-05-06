@@ -19,6 +19,12 @@
     },
     "plugins": [
       "expo-notifications"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "adb81213-682e-45cb-a971-24976671f4a1"
+      }
+    },
+    "owner": "demontoon"
   }
 }
