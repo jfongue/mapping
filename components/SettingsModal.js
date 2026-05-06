@@ -21,6 +21,7 @@ export default function SettingsModal({
   profile, draftName, setDraftName,
   onPatch, debugEnabled, onToggleDebug,
   onClose, onValidateName,
+  onDebugGenerateMessage,
 }) {
   const outfit = profile?.outfit || 'red';
   const skin = profile?.skin || 'light';
@@ -116,6 +117,16 @@ export default function SettingsModal({
               <View style={[styles.knob, debugEnabled && styles.knobOn]} />
             </TouchableOpacity>
           </View>
+
+          {debugEnabled && onDebugGenerateMessage && (
+            <TouchableOpacity
+              style={styles.debugBtn}
+              onPress={onDebugGenerateMessage}
+              activeOpacity={0.75}
+            >
+              <Text style={styles.debugBtnText}>📜 Générer un message au sol</Text>
+            </TouchableOpacity>
+          )}
         </ScrollView>
 
         <TouchableOpacity
@@ -216,4 +227,12 @@ const styles = StyleSheet.create({
     paddingVertical: 12, borderRadius: THEME.radiusMd, alignItems: 'center',
   },
   closeText: { color: THEME.textOnDark, fontSize: 15, fontWeight: '700' },
+  debugBtn: {
+    marginTop: 12,
+    backgroundColor: 'rgba(139,69,19,0.15)',
+    borderWidth: 1.5, borderColor: '#8b4513',
+    borderRadius: THEME.radiusMd,
+    paddingVertical: 10, alignItems: 'center',
+  },
+  debugBtnText: { color: '#8b4513', fontSize: 13, fontWeight: '700' },
 });
