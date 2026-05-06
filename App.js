@@ -172,6 +172,9 @@ export default function App() {
   const [consumedDist, setConsumedDist] = useState(0);
   const lastConsumedTick = useRef(0);
 
+  // Longueur totale du trajet en cours (capturée au démarrage, stable même si activePathRef change)
+  const tripTotalLengthRef = useRef(0);
+
   // Récapitulatif de fin de trajet
   const [tripSummary, setTripSummary] = useState(null);
   const tripStartedAtRef = useRef(null);
@@ -766,6 +769,7 @@ export default function App() {
     moveTarget.current = samples[samples.length - 1];
     moveBaseDuration.current = baseDuration;
     tripStartedAtRef.current = Date.now();
+    tripTotalLengthRef.current = length; // capture la longueur totale au démarrage
     setTripSummary(null);
     setMoving(true);
     const etaMs = Date.now() + dur;
@@ -809,14 +813,8 @@ export default function App() {
   };
 
   const finalizeArrival = (final) => {
-    // Calcul du récapitulatif avant de réinitialiser les refs
-    const pathAtArrival = activePathRef.current;
-    const tripDistancePx = pathAtArrival && pathAtArrival.length >= 2
-      ? pathAtArrival.reduce((sum, point, index, arr) => {
-          if (index === 0) return sum;
-          return sum + Math.hypot(point.x - arr[index - 1].x, point.y - arr[index - 1].y);
-        }, 0)
-      : 0;
+    // Utilise la longueur totale capturée au démarrage du trajet (stable même si activePathRef a changé)
+    const tripDistancePx = tripTotalLengthRef.current || 0;
     const tripDurationMs = tripStartedAtRef.current ? Date.now() - tripStartedAtRef.current : 0;
 
     animX.setValue(final.x);
@@ -833,6 +831,7 @@ export default function App() {
     currentAnim.current = null;
     moveTarget.current = null;
     tripStartedAtRef.current = null;
+    tripTotalLengthRef.current = 0;
 
     // Affiche le récapitulatif si le trajet avait une distance mesurable
     if (tripDistancePx > 0 || tripDurationMs > 0) {
