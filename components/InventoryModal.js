@@ -1,22 +1,70 @@
-// Modal Inventaire : liste des messages ramassés.
-// L'utilisateur peut lire (marque comme lu) et supprimer chaque message.
+// Modal Inventaire : liste des messages ramassés, regroupés par auteur.
 import React, { useState } from 'react';
 import {
   StyleSheet, View, Text, ScrollView,
   TouchableWithoutFeedback, TouchableOpacity,
 } from 'react-native';
-import { ScrollText, Trash2 } from 'lucide-react-native';
+import { ScrollText, Trash2, ChevronDown, ChevronRight } from 'lucide-react-native';
 import { THEME } from '../src/theme';
+
+// Formate un timestamp (ms) en date lisible : "Aujourd'hui 14:32" ou "12 mai 14:32"
+const formatDate = (ts) => {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const now = new Date();
+  const isToday =
+    d.getDate() === now.getDate() &&
+    d.getMonth() === now.getMonth() &&
+    d.getFullYear() === now.getFullYear();
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  if (isToday) return `Aujourd'hui ${hh}:${mm}`;
+  const months = ['jan', 'fév', 'mar', 'avr', 'mai', 'jun',
+                   'jul', 'aoû', 'sep', 'oct', 'nov', 'déc'];
+  return `${d.getDate()} ${months[d.getMonth()]} ${hh}:${mm}`;
+};
 
 export default function InventoryModal({ items, onClose, onMarkRead, onDelete }) {
   const [openId, setOpenId] = useState(null);
+  const [collapsedAuthors, setCollapsedAuthors] = useState({});
 
-  const open = (l) => {
+  const toggleAuthor = (authorId) => {
+    setCollapsedAuthors((prev) => ({ ...prev, [authorId]: !prev[authorId] }));
+  };
+
+  const openMsg = (l) => {
     setOpenId(l.id);
     if (l.unread) onMarkRead(l.id);
   };
 
-  const sorted = [...(items || [])].sort((a, b) => (b.pickedAt || 0) - (a.pickedAt || 0));
+  // Regroupement par auteur
+  const groupsMap = {};
+  for (const l of (items || [])) {
+    const key = l.authorId || 'unknown';
+    if (!groupsMap[key]) {
+      groupsMap[key] = {
+        authorId: key,
+        authorName: l.authorName || 'Anonyme',
+        authorColor: l.authorColor || '#888',
+        messages: [],
+        lastAt: 0,
+        unreadCount: 0,
+      };
+    }
+    groupsMap[key].messages.push(l);
+    if ((l.pickedAt || 0) > groupsMap[key].lastAt) groupsMap[key].lastAt = l.pickedAt || 0;
+    if (l.unread) groupsMap[key].unreadCount += 1;
+  }
+
+  // Trier les groupes par date du dernier message (plus récent en premier)
+  const groups = Object.values(groupsMap).sort((a, b) => b.lastAt - a.lastAt);
+
+  // Trier les messages à l'intérieur de chaque groupe (plus récent en premier)
+  groups.forEach((g) => {
+    g.messages.sort((a, b) => (b.pickedAt || 0) - (a.pickedAt || 0));
+  });
+
+  const total = (items || []).length;
 
   return (
     <View style={styles.overlay}>
@@ -24,48 +72,77 @@ export default function InventoryModal({ items, onClose, onMarkRead, onDelete })
         <View style={StyleSheet.absoluteFill} />
       </TouchableWithoutFeedback>
       <View style={styles.card}>
-        <Text style={styles.kicker}>INVENTAIRE</Text>
+        <Text style={styles.kicker}>MESSAGERIE</Text>
         <Text style={styles.title}>
-          {sorted.length === 0 ? 'Aucun message' : `${sorted.length} message${sorted.length > 1 ? 's' : ''}`}
+          {total === 0 ? 'Aucun message' : `${total} message${total > 1 ? 's' : ''}`}
         </Text>
 
-        {sorted.length === 0 ? (
+        {total === 0 ? (
           <Text style={styles.empty}>
             Approche-toi d'un message sur la carte pour le ramasser.
           </Text>
         ) : (
-          <ScrollView style={{ maxHeight: 380 }} contentContainerStyle={{ paddingVertical: 4 }}>
-            {sorted.map((l) => {
-              const isOpen = openId === l.id;
+          <ScrollView style={{ maxHeight: 400 }} contentContainerStyle={{ paddingVertical: 4 }}>
+            {groups.map((group) => {
+              const isCollapsed = collapsedAuthors[group.authorId];
               return (
-                <View key={l.id} style={styles.item}>
-                  <TouchableOpacity style={styles.itemHead} onPress={() => open(l)} activeOpacity={0.7}>
-                    <View style={styles.itemIcon}>
-                      <ScrollText size={20} color={THEME.text} strokeWidth={2.2} />
-                      {l.unread && <View style={styles.unreadDot} />}
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <View style={styles.itemRow}>
-                        <View style={[styles.dot, { backgroundColor: l.authorColor || '#888' }]} />
-                        <Text style={styles.author} numberOfLines={1}>
-                          {l.authorName || 'Anonyme'}
-                        </Text>
+                <View key={group.authorId} style={styles.group}>
+                  {/* En-tête de groupe auteur */}
+                  <TouchableOpacity
+                    style={styles.groupHeader}
+                    onPress={() => toggleAuthor(group.authorId)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={[styles.authorDot, { backgroundColor: group.authorColor }]} />
+                    <Text style={styles.authorName} numberOfLines={1}>
+                      {group.authorName}
+                    </Text>
+                    {group.unreadCount > 0 && (
+                      <View style={styles.badge}>
+                        <Text style={styles.badgeText}>{group.unreadCount}</Text>
                       </View>
-                      {!isOpen && (
-                        <Text style={styles.preview} numberOfLines={1}>{l.text}</Text>
-                      )}
-                    </View>
-                    <TouchableOpacity
-                      style={styles.deleteBtn}
-                      onPress={() => onDelete(l.id)}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    >
-                      <Trash2 size={16} color={THEME.danger} strokeWidth={2.2} />
-                    </TouchableOpacity>
+                    )}
+                    <Text style={styles.groupCount}>
+                      {group.messages.length} lettre{group.messages.length > 1 ? 's' : ''}
+                    </Text>
+                    {isCollapsed
+                      ? <ChevronRight size={16} color={THEME.textMuted} strokeWidth={2.2} />
+                      : <ChevronDown size={16} color={THEME.textMuted} strokeWidth={2.2} />
+                    }
                   </TouchableOpacity>
-                  {isOpen && (
-                    <Text style={styles.body}>{l.text}</Text>
-                  )}
+
+                  {/* Messages du groupe */}
+                  {!isCollapsed && group.messages.map((l) => {
+                    const isOpen = openId === l.id;
+                    return (
+                      <View key={l.id} style={styles.item}>
+                        <TouchableOpacity style={styles.itemHead} onPress={() => openMsg(l)} activeOpacity={0.7}>
+                          <View style={styles.itemIcon}>
+                            <ScrollText size={18} color={THEME.text} strokeWidth={2.2} />
+                            {l.unread && <View style={styles.unreadDot} />}
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <View style={styles.metaRow}>
+                              <Text style={styles.dateText}>{formatDate(l.pickedAt)}</Text>
+                            </View>
+                            {!isOpen && (
+                              <Text style={styles.preview} numberOfLines={1}>{l.text}</Text>
+                            )}
+                          </View>
+                          <TouchableOpacity
+                            style={styles.deleteBtn}
+                            onPress={() => onDelete(l.id)}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          >
+                            <Trash2 size={15} color={THEME.danger} strokeWidth={2.2} />
+                          </TouchableOpacity>
+                        </TouchableOpacity>
+                        {isOpen && (
+                          <Text style={styles.body}>{l.text}</Text>
+                        )}
+                      </View>
+                    );
+                  })}
                 </View>
               );
             })}
@@ -106,33 +183,52 @@ const styles = StyleSheet.create({
     fontSize: 13, color: THEME.textMuted,
     textAlign: 'center', paddingVertical: 22, fontStyle: 'italic',
   },
+  // Groupe auteur
+  group: {
+    marginBottom: 10,
+  },
+  groupHeader: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingVertical: 7, paddingHorizontal: 10,
+    backgroundColor: '#f4e4bc',
+    borderRadius: THEME.radiusMd,
+    borderWidth: 1, borderColor: THEME.border,
+  },
+  authorDot: { width: 12, height: 12, borderRadius: 6 },
+  authorName: { flex: 1, fontSize: 13, fontWeight: '700', color: THEME.text },
+  badge: {
+    backgroundColor: THEME.danger,
+    borderRadius: 10, paddingHorizontal: 6, paddingVertical: 1,
+  },
+  badgeText: { color: '#fff', fontSize: 10, fontWeight: '800' },
+  groupCount: { fontSize: 11, color: THEME.textMuted, marginRight: 2 },
+  // Item message
   item: {
     borderWidth: 1, borderColor: THEME.borderSoft,
     borderRadius: THEME.radiusMd,
     backgroundColor: '#fffef0',
-    marginBottom: 8, padding: 10,
+    marginTop: 5, marginLeft: 14, padding: 10,
   },
   itemHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   itemIcon: {
-    width: 32, height: 32, borderRadius: 16,
+    width: 28, height: 28, borderRadius: 14,
     backgroundColor: '#f4e4bc',
     borderWidth: 1, borderColor: THEME.borderSoft,
     justifyContent: 'center', alignItems: 'center',
   },
   unreadDot: {
     position: 'absolute', top: -2, right: -2,
-    width: 10, height: 10, borderRadius: 5,
+    width: 9, height: 9, borderRadius: 5,
     backgroundColor: THEME.danger,
     borderWidth: 1.5, borderColor: THEME.card,
   },
-  itemRow: { flexDirection: 'row', alignItems: 'center' },
-  dot: { width: 10, height: 10, borderRadius: 5, marginRight: 6 },
-  author: { fontSize: 13, fontWeight: '700', color: THEME.text, flex: 1 },
+  metaRow: { flexDirection: 'row', alignItems: 'center' },
+  dateText: { fontSize: 11, color: THEME.textMuted, fontStyle: 'italic' },
   preview: { fontSize: 12, color: THEME.textMuted, marginTop: 2 },
   body: {
     fontSize: 14, color: THEME.text, fontStyle: 'italic',
     lineHeight: 20, marginTop: 8,
-    paddingLeft: 42,
+    paddingLeft: 38,
   },
   deleteBtn: { padding: 4 },
   close: {
