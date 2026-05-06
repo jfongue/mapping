@@ -28,6 +28,13 @@ import {
 } from './src/constants';
 import { THEME } from './src/theme';
 
+// --- Notifications ---
+import {
+  requestNotificationPermissions,
+  scheduleArrivalNotification,
+  cancelArrivalNotification,
+} from './src/notifications';
+
 const INVENTORY_KEY = '@treasureProto.inventory.v1';
 const LETTER_PICKUP_RADIUS = 130;
 const PLAYER_NEAR_RADIUS = 130;
@@ -223,6 +230,11 @@ export default function App() {
     }
     return stopFollowLoop;
   }, [moving]);
+
+  // Demande les permissions notifications au montage
+  useEffect(() => {
+    requestNotificationPermissions();
+  }, []);
 
   // Charge save pos — téléporte sur case safe si zone interdite
   useEffect(() => {
@@ -709,6 +721,7 @@ export default function App() {
       progressRef.current.removeListener(progressListenerId.current);
       progressListenerId.current = null;
     }
+    cancelArrivalNotification(); // trajet annulé manuellement
     pendingPickupRef.current = null;
     const cx = animX.__getValue();
     const cy = animY.__getValue();
@@ -728,7 +741,8 @@ export default function App() {
     moveTarget.current = samples[samples.length - 1];
     moveBaseDuration.current = baseDuration;
     setMoving(true);
-    setEta(Date.now() + dur);
+    const etaMs = Date.now() + dur;
+    setEta(etaMs);
     setConsumedDist(0);
     lastConsumedTick.current = 0;
     announceMove({
@@ -737,6 +751,10 @@ export default function App() {
       startTs: Date.now(),
       durationMs: dur,
     });
+    // Planifie la notification d'arrivée
+    const last = samples[samples.length - 1];
+    const destLabel = `${Math.round(last.x / TILE_PX)}, ${Math.round(last.y / TILE_PX)}`;
+    scheduleArrivalNotification(etaMs, destLabel);
     const progress = new Animated.Value(0);
     progressRef.current = progress;
     const DOT_TICK = 26;
@@ -1213,7 +1231,6 @@ const styles = StyleSheet.create({
     ...THEME.shadow, shadowRadius: 12,
   },
   iconText: { color: THEME.text, fontSize: 22, fontWeight: '700' },
-  // Bouton debug : bas gauche
   speedBtn: {
     position: 'absolute', bottom: 40, left: 16,
     paddingHorizontal: 16, paddingVertical: 10, borderRadius: 22,
