@@ -18,7 +18,7 @@ export async function requestNotificationPermissions() {
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync('arrival', {
       name: 'Arrivée à destination',
-      importance: Notifications.AndroidImportance.HIGH,
+      importance: Notifications.AndroidImportance.LOW,
       vibrationPattern: [0, 250, 250, 250],
       lightColor: '#ffd93d',
     });
