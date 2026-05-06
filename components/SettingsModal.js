@@ -22,6 +22,9 @@ export default function SettingsModal({
   onPatch, debugEnabled, onToggleDebug,
   onClose, onValidateName,
   onDebugGenerateMessage,
+  onDebugSpeedPressIn,
+  onDebugSpeedPressOut,
+  debugSpeedMul,
 }) {
   const outfit = profile?.outfit || 'red';
   const skin = profile?.skin || 'light';
@@ -40,7 +43,7 @@ export default function SettingsModal({
           <AdventurerPreview outfit={outfit} skin={skin} hair={hair} hat={hat} size={120} />
         </View>
 
-        <ScrollView style={{ maxHeight: 360 }}>
+        <ScrollView style={{ maxHeight: 380 }}>
           <Section label="Pseudo">
             <TextInput
               value={draftName}
@@ -108,8 +111,9 @@ export default function SettingsModal({
             </Row>
           </Section>
 
+          {/* Toggle debug */}
           <View style={styles.row}>
-            <Text style={styles.label}>Mode debug (boost vitesse)</Text>
+            <Text style={styles.label}>Mode debug</Text>
             <TouchableOpacity
               onPress={onToggleDebug}
               style={[styles.toggle, debugEnabled && styles.toggleOn]}
@@ -118,14 +122,41 @@ export default function SettingsModal({
             </TouchableOpacity>
           </View>
 
-          {debugEnabled && onDebugGenerateMessage && (
-            <TouchableOpacity
-              style={styles.debugBtn}
-              onPress={onDebugGenerateMessage}
-              activeOpacity={0.75}
-            >
-              <Text style={styles.debugBtnText}>📜 Générer un message au sol</Text>
-            </TouchableOpacity>
+          {/* Section debug — visible seulement quand activé */}
+          {debugEnabled && (
+            <View style={styles.debugSection}>
+              <Text style={styles.debugSectionLabel}>Actions debug</Text>
+
+              {/* 1. Accélération — toujours en premier */}
+              <TouchableOpacity
+                style={[
+                  styles.debugActionBtn,
+                  debugSpeedMul > 1 && styles.debugActionBtnActive,
+                ]}
+                onPressIn={onDebugSpeedPressIn}
+                onPressOut={onDebugSpeedPressOut}
+                activeOpacity={0.8}
+              >
+                <Text style={[
+                  styles.debugActionText,
+                  debugSpeedMul > 1 && styles.debugActionTextActive,
+                ]}>
+                  ⏩ Accélération{debugSpeedMul > 1 ? ` ×${debugSpeedMul}` : ''}
+                </Text>
+                <Text style={styles.debugActionHint}>Maintenir pour accélérer</Text>
+              </TouchableOpacity>
+
+              {/* 2. Générer un message */}
+              {onDebugGenerateMessage && (
+                <TouchableOpacity
+                  style={styles.debugActionBtn}
+                  onPress={onDebugGenerateMessage}
+                  activeOpacity={0.75}
+                >
+                  <Text style={styles.debugActionText}>📜 Générer un message au sol</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           )}
         </ScrollView>
 
@@ -227,12 +258,30 @@ const styles = StyleSheet.create({
     paddingVertical: 12, borderRadius: THEME.radiusMd, alignItems: 'center',
   },
   closeText: { color: THEME.textOnDark, fontSize: 15, fontWeight: '700' },
-  debugBtn: {
-    marginTop: 12,
-    backgroundColor: 'rgba(139,69,19,0.15)',
+  // Section debug
+  debugSection: {
+    marginTop: 10,
+    borderTopWidth: 1, borderTopColor: THEME.borderSoft,
+    paddingTop: 12,
+    gap: 8,
+  },
+  debugSectionLabel: {
+    fontSize: 11, fontWeight: '700',
+    color: THEME.textMuted,
+    textTransform: 'uppercase', letterSpacing: 1,
+    marginBottom: 4,
+  },
+  debugActionBtn: {
+    backgroundColor: 'rgba(139,69,19,0.10)',
     borderWidth: 1.5, borderColor: '#8b4513',
     borderRadius: THEME.radiusMd,
-    paddingVertical: 10, alignItems: 'center',
+    paddingVertical: 10, paddingHorizontal: 14,
   },
-  debugBtnText: { color: '#8b4513', fontSize: 13, fontWeight: '700' },
+  debugActionBtnActive: {
+    backgroundColor: '#ff6b6b',
+    borderColor: '#ff6b6b',
+  },
+  debugActionText: { color: '#8b4513', fontSize: 13, fontWeight: '700' },
+  debugActionTextActive: { color: '#fff' },
+  debugActionHint: { color: THEME.textMuted, fontSize: 10, marginTop: 2 },
 });
