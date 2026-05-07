@@ -48,6 +48,12 @@ import TileLayer, { MAP_W_PX, MAP_H_PX } from './components/TileLayer';
 import DottedTrail from './components/DottedTrail';
 import XPBar from './components/XPBar';
 
+// --- Fog of War ---
+import useFogOfWar from './src/fog/useFogOfWar';
+import FogOfWarLayer from './src/fog/FogOfWarLayer';
+import { coordToTileKey } from './src/fog/fogUtils';
+import { TILE_SIZE_DEG } from './src/fog/fogConstants';
+
 const WATER_COLOR = '#bce0e8';
 
 function safePixelPos(px, py) {
@@ -114,6 +120,17 @@ const INIT_X = SCREEN_W / 2 - MAP_SIZE / 2;
 const INIT_Y = SCREEN_H / 2 - MAP_SIZE / 2;
 
 const PAN_THRESHOLD_PX = 5;
+
+/**
+ * Convertit une position pixel sur la tilemap en "pseudo-coordonnées"
+ * utilisées par le système de brouillard (on réutilise TILE_SIZE_DEG
+ * comme unité de grille, en remplaçant les degrés par des pixels / TILE_PX).
+ * Cela nous évite un vrai système GPS tout en réutilisant fogUtils tel quel.
+ */
+const pixelToFogCoord = (px, py) => ({
+  latitude:  py / TILE_PX,
+  longitude: px / TILE_PX,
+});
 
 export default function App() {
   const [viewport, setViewport] = useState({ w: SCREEN_W, h: SCREEN_H });
@@ -193,6 +210,15 @@ export default function App() {
   // --- Suivi de joueurs ---
   const [followedPlayers, setFollowedPlayers] = useState(new Set());
   const [playersListOpen, setPlayersListOpen] = useState(false);
+
+  // --- Fog of War ---
+  const { tiles: fogTiles, revealPosition, getOpacity: getFogOpacity, isLoaded: fogLoaded } = useFogOfWar();
+
+  // Révèle les tuiles autour du personnage dès que sa position change
+  useEffect(() => {
+    const { latitude, longitude } = pixelToFogCoord(pos.x, pos.y);
+    revealPosition(latitude, longitude);
+  }, [pos.x, pos.y]);
 
   // Persiste les joueurs suivis
   useEffect(() => {
@@ -325,7 +351,6 @@ export default function App() {
           x: animX.__getValue(), y: animY.__getValue(),
         });
         if (!alive) return;
-        // À la connexion, on restaure totalDistancePx depuis Firebase uniquement.
         if (result && typeof result.totalDistancePx === 'number' && result.totalDistancePx > 0) {
           setTotalDistancePx(result.totalDistancePx);
           AsyncStorage.setItem(TOTAL_DISTANCE_KEY, result.totalDistancePx.toString()).catch(() => {});
@@ -1066,6 +1091,28 @@ export default function App() {
     return { dist: Math.round(length), durSec: Math.round(durMs / 1000) };
   })() : null;
 
+  // Calcule la région "fog" à partir du scale/offset actuel
+  // On mappe les pixels écran → unités de grille fog (px / TILE_PX)
+  const getFogRegion = () => {
+    const s = lastScale.current;
+    const offX = lastOffset.current.x;
+    const offY = lastOffset.current.y;
+    const vw = viewport.w || SCREEN_W;
+    const vh = viewport.h || SCREEN_H;
+    const cx = MAP_W_PX / 2;
+    const cy = MAP_H_PX / 2;
+    // Coin haut-gauche en pixels map
+    const mapLeft   = (-offX - cx * (1 - s)) / s;
+    const mapTop    = (-offY - cy * (1 - s)) / s;
+    const mapRight  = mapLeft + vw / s;
+    const mapBottom = mapTop  + vh / s;
+    const centerLat = ((mapTop  + mapBottom) / 2) / TILE_PX;
+    const centerLon = ((mapLeft + mapRight)  / 2) / TILE_PX;
+    const latDelta  = ((mapBottom - mapTop)  / TILE_PX);
+    const lonDelta  = ((mapRight  - mapLeft) / TILE_PX);
+    return { latitude: centerLat, longitude: centerLon, latitudeDelta: latDelta, longitudeDelta: lonDelta };
+  };
+
   // --- Modale liste des joueurs ---
   const renderPlayersListModal = () => (
     <Modal
@@ -1225,6 +1272,16 @@ export default function App() {
                           outfit={profile?.outfit||'red'} skin={profile?.skin||'light'}
                           hair={profile?.hair||'brown'} hat={profile?.hat||'none'} />
                       </Animated.View>
+
+                      {/* ── Fog of War ── rendu par-dessus tout le contenu de la map */}
+                      {fogLoaded && (
+                        <FogOfWarLayer
+                          tiles={fogTiles}
+                          getOpacity={getFogOpacity}
+                          region={getFogRegion()}
+                          layout={{ width: MAP_W_PX, height: MAP_H_PX }}
+                        />
+                      )}
                     </View>
                   </TouchableWithoutFeedback>
                 </Animated.View>
