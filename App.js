@@ -294,13 +294,21 @@ export default function App() {
     let alive = true;
     (async () => {
       try {
-        await joinMultiplayer({
+        const result = await joinMultiplayer({
           playerId: profile.id, name: profile.name, color: profile.color,
           outfit: profile.outfit, skin: profile.skin,
           hair: profile.hair, hat: profile.hat,
           x: animX.__getValue(), y: animY.__getValue(),
         });
         if (!alive) return;
+        // Restaurer totalDistancePx depuis Firebase si la valeur distante est plus grande
+        if (result && typeof result.totalDistancePx === 'number' && result.totalDistancePx > 0) {
+          setTotalDistancePx((prev) => {
+            const best = Math.max(prev, result.totalDistancePx);
+            AsyncStorage.setItem(TOTAL_DISTANCE_KEY, best.toString()).catch(() => {});
+            return best;
+          });
+        }
         unsub = subscribePlayers((list) => setOtherPlayers(list));
       } catch (e) {
         console.warn('multi join failed', e);
