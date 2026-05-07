@@ -66,26 +66,18 @@ function buildDemoMap() {
   tiles.fill(TILES.PLAIN);
 
   const cx = MAP_W / 2, cy = MAP_H / 2;
-  // Masque d'île : falloff radial + bruit côtier → pas de bord net
   const noiseCoast = smoothedNoise(MAP_W, MAP_H, MAP_W / 6, makeRand(2222));
-  // Bruit de forêt (fond + clusters)
   const noiseFor   = smoothedNoise(MAP_W, MAP_H, MAP_W / 9, makeRand(3333));
-  // Bruit de montagne
   const noiseMtn   = smoothedNoise(MAP_W, MAP_H, MAP_W / 14, makeRand(9999));
-  // Bruit de lacs
   const noiseLake  = smoothedNoise(MAP_W, MAP_H, MAP_W / 10, makeRand(6543));
-  // Bruit de rivières
   const noiseRiv   = smoothedNoise(MAP_W, MAP_H, MAP_W / 12, makeRand(8888));
 
-  // --- Étape 1 : masque île (bords organiques, pas de rectangle) ---
   for (let y = 0; y < MAP_H; y++) {
     for (let x = 0; x < MAP_W; x++) {
       const ndx = (x - cx) / (MAP_W * 0.46);
       const ndy = (y - cy) / (MAP_H * 0.46);
-      // Ellipse légèrement déformée par le bruit côtier
       const dist = Math.sqrt(ndx*ndx + ndy*ndy);
       const coast = noiseCoast[y*MAP_W+x];
-      // Seuil progressif : beach à 0.85-0.95, water au-delà
       const edgeDist = dist + (coast - 0.5) * 0.18;
       if (edgeDist > 0.95) {
         tiles[y*MAP_W+x] = TILES.WATER;
@@ -95,7 +87,6 @@ function buildDemoMap() {
     }
   }
 
-  // --- Étape 2 : FOREST couvrant via bruit (dense ~55% du continent) ---
   for (let y = 0; y < MAP_H; y++) {
     for (let x = 0; x < MAP_W; x++) {
       const t = tiles[y*MAP_W+x];
@@ -104,7 +95,6 @@ function buildDemoMap() {
     }
   }
 
-  // --- Étape 3 : clusters ROCK (10 massifs, rayon 3-5) ---
   {
     const rand = makeRand(4321);
     const MARGIN = 8;
@@ -123,7 +113,6 @@ function buildDemoMap() {
         }
       }
     }
-    // 2 volcans (rayon 2)
     for (let v = 0; v < 2; v++) {
       const qx = MARGIN + Math.floor(rand() * (MAP_W - MARGIN*2));
       const qy = MARGIN + Math.floor(rand() * (MAP_H - MARGIN*2));
@@ -137,7 +126,6 @@ function buildDemoMap() {
     }
   }
 
-  // --- Étape 4 : lacs intérieurs ---
   {
     const LMARGIN = 12;
     for (let y = LMARGIN; y < MAP_H-LMARGIN; y++) {
@@ -148,7 +136,6 @@ function buildDemoMap() {
     }
   }
 
-  // --- Étape 5 : rivières (intérieur → bord) ---
   {
     const rand = makeRand(1122);
     const MARGIN = 10;
@@ -183,7 +170,6 @@ function buildDemoMap() {
     }
   }
 
-  // --- Étape 6 : majority filter ×2 (lissage des frontières) ---
   const tmp = new Uint8Array(MAP_W * MAP_H);
   const counts = new Uint8Array(6);
   for (let pass = 0; pass < 2; pass++) {
@@ -205,7 +191,6 @@ function buildDemoMap() {
     tiles.set(tmp);
   }
 
-  // --- Étape 7 : spawn central garanti en PLAIN ---
   const spawnX = Math.floor(MAP_W/2), spawnY = Math.floor(MAP_H/2);
   const spawnR = Math.max(3, Math.floor(MAP_W/50));
   for (let oy = -spawnR; oy <= spawnR; oy++) {
@@ -249,7 +234,9 @@ class MinHeap {
   get size() { return this.a.length; }
 }
 
-export function findPath(tiles, W, H, sx, sy, tx, ty) {
+// findPath avec support sillons optionnel.
+// sillons = objet { 'cx,cy': { count } } — optionnel, passe null si non disponible.
+export function findPath(tiles, W, H, sx, sy, tx, ty, sillons = null) {
   sx=Math.round(sx); sy=Math.round(sy); tx=Math.round(tx); ty=Math.round(ty);
   if (sx===tx&&sy===ty) return [{x:tx,y:ty}];
   if (tx<0||tx>=W||ty<0||ty>=H) return null;
@@ -285,10 +272,26 @@ export function findPath(tiles, W, H, sx, sy, tx, ty) {
       const ddx=dirs[d][0],ddy=dirs[d][1],nx=x+ddx,ny=y+ddy;
       if (nx<0||nx>=W||ny<0||ny>=H) continue;
       const ni=ny*W+nx; if (closed[ni]) continue;
-      const tt=tiles[ni]; if (!WALKABLE[tt]) continue;
+      const tt=tiles[ni];
+      // L'eau est désormais traversable grâce aux sillons/ponts
+      if (tt === 0 /* WATER */) {
+        if (!sillons) continue; // Pas de sillons → infranchissable comme avant
+        const count = sillons[`${nx},${ny}`]?.count ?? 0;
+        if (count < 10) continue; // Pas assez de passages pour un pont
+      } else if (!WALKABLE[tt]) continue;
       if (ddx&&ddy&&(!WALKABLE[tiles[y*W+nx]]||!WALKABLE[tiles[ny*W+x]])) continue;
       const stepDist=(ddx&&ddy)?Math.SQRT2:1;
-      const ng=gCur+stepDist*(WALK_COST[tt]||1);
+      const baseCost = WALK_COST[tt] || 1;
+      // Coût réduit par les sillons (chemin rapide = moins coûteux pour A*)
+      let sillonMul = 1;
+      if (sillons) {
+        const count = sillons[`${nx},${ny}`]?.count ?? 0;
+        if (count >= 5)   sillonMul = 1 / 1.15;
+        if (count >= 20)  sillonMul = 1 / 1.50;
+        if (count >= 60)  sillonMul = 1 / 2.00;
+        if (count >= 150) sillonMul = 1 / 3.00;
+      }
+      const ng=gCur+stepDist*baseCost*sillonMul;
       if (ng<gScore[ni]) {
         gScore[ni]=ng; prev[ni]=idx;
         open.push([ng+octile(nx,ny,tx,ty),ni]);
