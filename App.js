@@ -739,10 +739,11 @@ export default function App() {
   const progressListenerId = useRef(null);
 
   // Affiche le récapitulatif de fin de trajet (fermeture manuelle)
-  const showTripSummary = (distancePx, durationMs) => {
+  const showTripSummary = (distancePx, durationMs, pickedUpItems = []) => {
     setTripSummary({
       distancePx: Math.max(0, Math.round(distancePx || 0)),
       durationMs: Math.max(0, Math.round(durationMs || 0)),
+      pickedUpItems,
     });
   };
 
@@ -822,29 +823,32 @@ export default function App() {
     tripStartedAtRef.current = null;
     tripTotalLengthRef.current = 0;
 
-    // Affiche le récapitulatif si le trajet avait une distance mesurable
-    if (tripDistancePx > 0 || tripDurationMs > 0) {
-      showTripSummary(tripDistancePx, tripDurationMs);
-    }
-
     const pickup = pendingPickupRef.current;
     pendingPickupRef.current = null;
+
+    // Collecte les objets ramassés pour le récapitulatif
+    const pickedUpItems = [];
+
     if (pickup && pickup.id) {
       const stillThere = letters.some((l) => l.id === pickup.id);
       if (stillThere) {
+        const newItem = {
+          id: pickup.id, authorId: pickup.authorId,
+          authorName: pickup.authorName, authorColor: pickup.authorColor,
+          text: pickup.text, pickedAt: Date.now(), unread: true,
+        };
         setInventory((prev) => {
           if (prev.some((l) => l.id === pickup.id)) return prev;
-          return [
-            ...prev,
-            {
-              id: pickup.id, authorId: pickup.authorId,
-              authorName: pickup.authorName, authorColor: pickup.authorColor,
-              text: pickup.text, pickedAt: Date.now(), unread: true,
-            },
-          ];
+          return [...prev, newItem];
         });
         consumeLetter(pickup.id).catch(() => {});
+        pickedUpItems.push(newItem);
       }
+    }
+
+    // Affiche le récapitulatif si le trajet avait une distance mesurable
+    if (tripDistancePx > 0 || tripDurationMs > 0) {
+      showTripSummary(tripDistancePx, tripDurationMs, pickedUpItems);
     }
   };
 
@@ -1144,6 +1148,24 @@ export default function App() {
               <Text style={styles.tripSummaryText}>
                 {tripSummary ? `${formatMeters(tripSummary.distancePx)} · ${formatDuration(Math.round(tripSummary.durationMs / 1000))}` : ''}
               </Text>
+              {tripSummary?.pickedUpItems?.length > 0 && (
+                <View style={styles.tripSummaryPickups}>
+                  <Text style={styles.tripSummaryPickupsTitle}>
+                    📬 {tripSummary.pickedUpItems.length === 1 ? 'Message ramassé' : `${tripSummary.pickedUpItems.length} messages ramassés`}
+                  </Text>
+                  {tripSummary.pickedUpItems.map((item) => (
+                    <View key={item.id} style={styles.tripSummaryPickupItem}>
+                      <View style={[styles.tripSummaryPickupDot, { backgroundColor: item.authorColor || '#8b4513' }]} />
+                      <Text style={styles.tripSummaryPickupAuthor} numberOfLines={1}>
+                        {item.authorName || 'Anonyme'}
+                      </Text>
+                      <Text style={styles.tripSummaryPickupText} numberOfLines={2}>
+                        {item.text}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              )}
               <TouchableOpacity style={styles.tripSummaryBtn} onPress={dismissTripSummary} activeOpacity={0.8}>
                 <Text style={styles.tripSummaryBtnText}>Fermer</Text>
               </TouchableOpacity>
@@ -1344,6 +1366,7 @@ const styles = StyleSheet.create({
     paddingVertical: 28,
     alignItems: 'center',
     minWidth: 260,
+    maxWidth: 320,
     ...THEME.shadow,
     shadowRadius: 20,
   },
@@ -1361,6 +1384,50 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 20,
     opacity: 0.85,
+  },
+  tripSummaryPickups: {
+    width: '100%',
+    backgroundColor: 'rgba(0,0,0,0.08)',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 18,
+  },
+  tripSummaryPickupsTitle: {
+    color: THEME.text,
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 8,
+    opacity: 0.9,
+  },
+  tripSummaryPickupItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 6,
+    gap: 8,
+  },
+  tripSummaryPickupDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginTop: 4,
+    flexShrink: 0,
+  },
+  tripSummaryPickupAuthor: {
+    color: THEME.text,
+    fontSize: 12,
+    fontWeight: '700',
+    flexShrink: 0,
+    maxWidth: 80,
+    opacity: 0.9,
+  },
+  tripSummaryPickupText: {
+    color: THEME.text,
+    fontSize: 12,
+    fontWeight: '400',
+    flex: 1,
+    opacity: 0.75,
+    lineHeight: 16,
   },
   tripSummaryBtn: {
     backgroundColor: THEME.accent || '#3a7ea8',
