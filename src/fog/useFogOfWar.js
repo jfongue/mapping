@@ -1,30 +1,25 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getTilesToReveal, getTileOpacity as computeOpacity } from './fogUtils';
 
 const STORAGE_KEY = '@fog_of_war_tiles';
+const SAVE_DEBOUNCE_MS = 3000; // sauvegarde max toutes les 3s
+const REVEAL_THROTTLE_MS = 500; // révélation max toutes les 500ms
 
-/**
- * Hook principal du Brouillard de Guerre.
- *
- * Expose :
- *   - tiles          : { [tileKey]: { firstSeen, lastSeen } }
- *   - revealPosition : (latitude, longitude) => void  — appeler à chaque update GPS
- *   - getOpacity     : (tileKey) => number [0..1]
- *   - isLoaded       : bool — true une fois AsyncStorage lu
- */
 const useFogOfWar = () => {
-  const [tiles, setTiles]     = useState({});
+  const [tiles, setTiles]       = useState({});
   const [isLoaded, setIsLoaded] = useState(false);
 
-  // ─── Chargement initial depuis AsyncStorage ─────────────────────────────
+  const saveTimerRef    = useRef(null);
+  const lastRevealRef   = useRef(0);
+  const lastTileKeyRef  = useRef('');
+
+  // ─── Chargement initial ────────────────────────────────────────────────
   useEffect(() => {
     const load = async () => {
       try {
         const raw = await AsyncStorage.getItem(STORAGE_KEY);
-        if (raw) {
-          setTiles(JSON.parse(raw));
-        }
+        if (raw) setTiles(JSON.parse(raw));
       } catch (e) {
         console.warn('[FogOfWar] Erreur chargement AsyncStorage :', e);
       } finally {
@@ -34,45 +29,67 @@ const useFogOfWar = () => {
     load();
   }, []);
 
-  // ─── Sauvegarde automatique dès que tiles change ────────────────────────
+  // ─── Sauvegarde debouncée (max 1x toutes les 3s) ──────────────────────
   useEffect(() => {
-    if (!isLoaded) return; // ne pas écraser avant la lecture initiale
-    const save = async () => {
+    if (!isLoaded) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(async () => {
       try {
         await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(tiles));
       } catch (e) {
         console.warn('[FogOfWar] Erreur sauvegarde AsyncStorage :', e);
       }
+    }, SAVE_DEBOUNCE_MS);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
-    save();
   }, [tiles, isLoaded]);
 
-  // ─── Révéler les tuiles autour d'une position GPS ────────────────────────
+  // ─── Révéler les tuiles — throttlé + dédupliqué ───────────────────────
   const revealPosition = useCallback((latitude, longitude) => {
     const now = Date.now();
+
+    // Throttle : max 1 reveal toutes les 500ms
+    if (now - lastRevealRef.current < REVEAL_THROTTLE_MS) return;
+
+    // Déduplication : même tuile centrale = inutile de recalculer
+    const centerKey = `${Math.floor(latitude)}_${Math.floor(longitude)}`;
+    if (centerKey === lastTileKeyRef.current) return;
+
+    lastRevealRef.current  = now;
+    lastTileKeyRef.current = centerKey;
+
     const keysToReveal = getTilesToReveal(latitude, longitude);
 
     setTiles((prev) => {
+      let changed = false;
       const next = { ...prev };
       keysToReveal.forEach((key) => {
-        next[key] = {
-          firstSeen: prev[key]?.firstSeen ?? now,
-          lastSeen:  now,
-        };
+        const existing = prev[key];
+        // Ne mettre à jour que si la tuile n'existe pas ou si lastSeen est vieux (>1min)
+        if (!existing || now - existing.lastSeen > 60_000) {
+          next[key] = {
+            firstSeen: existing?.firstSeen ?? now,
+            lastSeen:  now,
+          };
+          changed = true;
+        }
       });
-      return next;
+      return changed ? next : prev; // évite re-render si rien n'a changé
     });
   }, []);
 
-  // ─── Opacité d'une tuile donnée ─────────────────────────────────────────
+  // ─── Opacité d'une tuile ────────────────────────────────────────────────
   const getOpacity = useCallback((tileKey) => {
     return computeOpacity(tiles[tileKey]);
   }, [tiles]);
 
-  // ─── Reset complet (utile pour les tests / debug) ──────────────────────
+  // ─── Reset complet ──────────────────────────────────────────────────────
   const resetFog = useCallback(async () => {
     setTiles({});
-    await AsyncStorage.removeItem(STORAGE_KEY);
+    try {
+      await AsyncStorage.removeItem(STORAGE_KEY);
+    } catch (e) {}
   }, []);
 
   return { tiles, revealPosition, getOpacity, isLoaded, resetFog };
