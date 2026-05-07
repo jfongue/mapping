@@ -28,7 +28,6 @@ import {
 } from './src/constants';
 import { THEME } from './src/theme';
 
-// --- Notifications ---
 import {
   requestNotificationPermissions,
   scheduleArrivalNotification,
@@ -51,8 +50,6 @@ import XPBar from './components/XPBar';
 // --- Fog of War ---
 import useFogOfWar from './src/fog/useFogOfWar';
 import FogOfWarLayer from './src/fog/FogOfWarLayer';
-import { coordToTileKey } from './src/fog/fogUtils';
-import { TILE_SIZE_DEG } from './src/fog/fogConstants';
 
 const WATER_COLOR = '#bce0e8';
 
@@ -122,10 +119,8 @@ const INIT_Y = SCREEN_H / 2 - MAP_SIZE / 2;
 const PAN_THRESHOLD_PX = 5;
 
 /**
- * Convertit une position pixel sur la tilemap en "pseudo-coordonnées"
- * utilisées par le système de brouillard (on réutilise TILE_SIZE_DEG
- * comme unité de grille, en remplaçant les degrés par des pixels / TILE_PX).
- * Cela nous évite un vrai système GPS tout en réutilisant fogUtils tel quel.
+ * Convertit une position pixel tilemap en coordonnées de grille fog.
+ * On réutilise TILE_PX comme unité de base (1 unité fog = 1 tile de la map).
  */
 const pixelToFogCoord = (px, py) => ({
   latitude:  py / TILE_PX,
@@ -207,20 +202,45 @@ export default function App() {
 
   const pinchListenerId = useRef(null);
 
-  // --- Suivi de joueurs ---
   const [followedPlayers, setFollowedPlayers] = useState(new Set());
   const [playersListOpen, setPlayersListOpen] = useState(false);
 
   // --- Fog of War ---
-  const { tiles: fogTiles, revealPosition, getOpacity: getFogOpacity, isLoaded: fogLoaded } = useFogOfWar();
+  const { tiles: fogTiles, revealPosition, getOpacity: getFogOpacity, isLoaded: fogLoaded, resetFog } = useFogOfWar();
 
-  // Révèle les tuiles autour du personnage dès que sa position change
+  // Régénère la "région" fog à partir de l'état actuel de la caméra
+  // Retourne null si les valeurs ne sont pas encore stables
+  const getFogRegion = () => {
+    const s = lastScale.current;
+    if (!s || s <= 0) return null;
+    const offX = lastOffset.current.x;
+    const offY = lastOffset.current.y;
+    const vw = viewport.w || SCREEN_W;
+    const vh = viewport.h || SCREEN_H;
+    if (!vw || !vh) return null;
+    const cx = MAP_W_PX / 2;
+    const cy = MAP_H_PX / 2;
+    const mapLeft   = (-offX - cx * (1 - s)) / s;
+    const mapTop    = (-offY - cy * (1 - s)) / s;
+    const mapRight  = mapLeft + vw / s;
+    const mapBottom = mapTop  + vh / s;
+    const latDelta  = (mapBottom - mapTop)  / TILE_PX;
+    const lonDelta  = (mapRight  - mapLeft) / TILE_PX;
+    if (latDelta <= 0 || lonDelta <= 0) return null;
+    return {
+      latitude:       ((mapTop + mapBottom) / 2) / TILE_PX,
+      longitude:      ((mapLeft + mapRight) / 2) / TILE_PX,
+      latitudeDelta:  latDelta,
+      longitudeDelta: lonDelta,
+    };
+  };
+
+  // Révèle les tuiles à chaque changement de position
   useEffect(() => {
     const { latitude, longitude } = pixelToFogCoord(pos.x, pos.y);
     revealPosition(latitude, longitude);
   }, [pos.x, pos.y]);
 
-  // Persiste les joueurs suivis
   useEffect(() => {
     (async () => {
       try {
@@ -1091,28 +1111,6 @@ export default function App() {
     return { dist: Math.round(length), durSec: Math.round(durMs / 1000) };
   })() : null;
 
-  // Calcule la région "fog" à partir du scale/offset actuel
-  // On mappe les pixels écran → unités de grille fog (px / TILE_PX)
-  const getFogRegion = () => {
-    const s = lastScale.current;
-    const offX = lastOffset.current.x;
-    const offY = lastOffset.current.y;
-    const vw = viewport.w || SCREEN_W;
-    const vh = viewport.h || SCREEN_H;
-    const cx = MAP_W_PX / 2;
-    const cy = MAP_H_PX / 2;
-    // Coin haut-gauche en pixels map
-    const mapLeft   = (-offX - cx * (1 - s)) / s;
-    const mapTop    = (-offY - cy * (1 - s)) / s;
-    const mapRight  = mapLeft + vw / s;
-    const mapBottom = mapTop  + vh / s;
-    const centerLat = ((mapTop  + mapBottom) / 2) / TILE_PX;
-    const centerLon = ((mapLeft + mapRight)  / 2) / TILE_PX;
-    const latDelta  = ((mapBottom - mapTop)  / TILE_PX);
-    const lonDelta  = ((mapRight  - mapLeft) / TILE_PX);
-    return { latitude: centerLat, longitude: centerLon, latitudeDelta: latDelta, longitudeDelta: lonDelta };
-  };
-
   // --- Modale liste des joueurs ---
   const renderPlayersListModal = () => (
     <Modal
@@ -1172,6 +1170,9 @@ export default function App() {
       </TouchableWithoutFeedback>
     </Modal>
   );
+
+  // Calcule la région fog à partir de l'état caméra
+  const fogRegion = getFogRegion();
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
@@ -1273,12 +1274,12 @@ export default function App() {
                           hair={profile?.hair||'brown'} hat={profile?.hat||'none'} />
                       </Animated.View>
 
-                      {/* ── Fog of War ── rendu par-dessus tout le contenu de la map */}
-                      {fogLoaded && (
+                      {/* Fog of War — par-dessus tout le contenu */}
+                      {fogLoaded && fogRegion && (
                         <FogOfWarLayer
                           tiles={fogTiles}
                           getOpacity={getFogOpacity}
-                          region={getFogRegion()}
+                          region={fogRegion}
                           layout={{ width: MAP_W_PX, height: MAP_H_PX }}
                         />
                       )}
@@ -1292,7 +1293,6 @@ export default function App() {
 
         {moving && <TravelingBar eta={eta} onStop={stopMove} />}
 
-        {/* Modale fin de trajet */}
         <Modal
           visible={!!tripSummary}
           transparent
@@ -1329,7 +1329,6 @@ export default function App() {
           </View>
         </Modal>
 
-        {/* Modale liste des joueurs */}
         {renderPlayersListModal()}
 
         {showRecenterBtn && (
@@ -1347,7 +1346,6 @@ export default function App() {
           </TouchableOpacity>
         )}
 
-        {/* Flèches uniquement pour les joueurs suivis */}
         {viewport.w > 0 && otherPlayers
           .filter((p) => followedPlayers.has(p.id))
           .map((p) => {
@@ -1361,7 +1359,6 @@ export default function App() {
           })
         }
 
-        {/* Badge en ligne — cliquable pour ouvrir la liste */}
         {profile && (
           <TouchableOpacity
             style={styles.onlineBadge}
@@ -1412,7 +1409,9 @@ export default function App() {
           <SettingsModal profile={profile} draftName={draftName} setDraftName={setDraftName}
             onPatch={saveProfile} debugEnabled={debugEnabled} onToggleDebug={onToggleDebug}
             onClose={() => setSettingsOpen(false)} onValidateName={validateName}
-            onDebugGenerateMessage={handleDebugGenerateMessage} />
+            onDebugGenerateMessage={handleDebugGenerateMessage}
+            resetFog={resetFog}
+          />
         )}
         {selectedPlayer && <PlayerDetailModal player={selectedPlayer} onClose={() => setSelectedPlayer(null)} />}
         {letterWriteOpen && (
@@ -1554,7 +1553,6 @@ const styles = StyleSheet.create({
     alignItems: 'center', marginTop: 4,
   },
   tripSummaryBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
-  // --- Modale joueurs ---
   playersModalOverlay: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.45)',
     justifyContent: 'flex-start', alignItems: 'flex-start',
