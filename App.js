@@ -5,7 +5,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   StyleSheet, View, Text, Dimensions, Animated, Easing,
-  TouchableWithoutFeedback, TouchableOpacity, Modal,
+  TouchableWithoutFeedback, TouchableOpacity, Modal, ScrollView,
 } from 'react-native';
 import {
   GestureHandlerRootView, PanGestureHandler, PinchGestureHandler, State,
@@ -36,6 +36,7 @@ import {
 } from './src/notifications';
 
 const INVENTORY_KEY = '@treasureProto.inventory.v1';
+const FOLLOWED_PLAYERS_KEY = '@treasureProto.followedPlayers.v1';
 const TOTAL_DISTANCE_KEY = 'TOTAL_DISTANCE_KEY';
 const LETTER_PICKUP_RADIUS = 130;
 const PLAYER_NEAR_RADIUS = 130;
@@ -105,7 +106,7 @@ import LetterReadModal from './components/LetterReadModal';
 import InventoryModal from './components/InventoryModal';
 import { ConfirmationBar, TravelingBar } from './components/TravelBars';
 import { AdventurerSprite } from './components/Adventurer';
-import { ScrollText, Settings, Crosshair, Backpack } from 'lucide-react-native';
+import { ScrollText, Settings, Crosshair, Backpack, Heart } from 'lucide-react-native';
 import { DEBUG_MESSAGES, DEBUG_MESSAGE_AUTHORS } from './src/debugMessages';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
@@ -174,14 +175,9 @@ export default function App() {
   const [consumedDist, setConsumedDist] = useState(0);
   const lastConsumedTick = useRef(0);
 
-  // Longueur totale du trajet en cours (capturée au démarrage, stable même si activePathRef change)
   const tripTotalLengthRef = useRef(0);
-
-  // Récapitulatif de fin de trajet
   const [tripSummary, setTripSummary] = useState(null);
   const tripStartedAtRef = useRef(null);
-
-  // Distance totale cumulée
   const [totalDistancePx, setTotalDistancePx] = useState(0);
 
   const globalNowRef = useRef(Date.now());
@@ -193,6 +189,36 @@ export default function App() {
   const totalY = Animated.add(ty, dy);
 
   const pinchListenerId = useRef(null);
+
+  // --- Suivi de joueurs ---
+  const [followedPlayers, setFollowedPlayers] = useState(new Set());
+  const [playersListOpen, setPlayersListOpen] = useState(false);
+
+  // Persiste les joueurs suivis
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(FOLLOWED_PLAYERS_KEY);
+        if (raw) {
+          const arr = JSON.parse(raw);
+          if (Array.isArray(arr)) setFollowedPlayers(new Set(arr));
+        }
+      } catch (e) {}
+    })();
+  }, []);
+
+  const toggleFollow = (playerId) => {
+    setFollowedPlayers((prev) => {
+      const next = new Set(prev);
+      if (next.has(playerId)) {
+        next.delete(playerId);
+      } else {
+        next.add(playerId);
+      }
+      AsyncStorage.setItem(FOLLOWED_PLAYERS_KEY, JSON.stringify([...next])).catch(() => {});
+      return next;
+    });
+  };
 
   const computeCenteredOffset = (charX, charY, vw, vh, s) => {
     const cx = MAP_W_PX / 2;
@@ -243,12 +269,10 @@ export default function App() {
     return stopFollowLoop;
   }, [moving]);
 
-  // Demande les permissions notifications au montage
   useEffect(() => {
     requestNotificationPermissions();
   }, []);
 
-  // Charge save pos — téléporte sur case safe si zone interdite
   useEffect(() => {
     (async () => {
       try {
@@ -301,7 +325,6 @@ export default function App() {
           x: animX.__getValue(), y: animY.__getValue(),
         });
         if (!alive) return;
-        // Restaurer totalDistancePx depuis Firebase si la valeur distante est plus grande
         if (result && typeof result.totalDistancePx === 'number' && result.totalDistancePx > 0) {
           setTotalDistancePx((prev) => {
             const best = Math.max(prev, result.totalDistancePx);
@@ -873,7 +896,6 @@ export default function App() {
         if (profileUpdate && typeof profileUpdate.catch === 'function') {
           profileUpdate.catch(() => {});
         }
-        // Passer startDist (avant ce trajet) pour l'animation XP
         if (tripDistancePx > 0 || tripDurationMs > 0) {
           showTripSummary(tripDistancePx, tripDurationMs, pickedUpItems, prev);
         }
@@ -1055,6 +1077,66 @@ export default function App() {
     return { dist: Math.round(length), durSec: Math.round(durMs / 1000) };
   })() : null;
 
+  // --- Modale liste des joueurs ---
+  const renderPlayersListModal = () => (
+    <Modal
+      visible={playersListOpen}
+      transparent
+      animationType="fade"
+      onRequestClose={() => setPlayersListOpen(false)}
+    >
+      <TouchableWithoutFeedback onPress={() => setPlayersListOpen(false)}>
+        <View style={styles.playersModalOverlay}>
+          <TouchableWithoutFeedback onPress={() => {}}>
+            <View style={styles.playersModalCard}>
+              <Text style={styles.playersModalTitle}>
+                👥 Joueurs en ligne ({otherPlayers.filter(isOnline).length})
+              </Text>
+              {otherPlayers.length === 0 ? (
+                <Text style={styles.playersModalEmpty}>Aucun autre joueur connecté</Text>
+              ) : (
+                <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
+                  {otherPlayers.map((p) => {
+                    const online = isOnline(p);
+                    const followed = followedPlayers.has(p.id);
+                    return (
+                      <View key={p.id} style={styles.playerRow}>
+                        <View style={[styles.playerRowDot, { backgroundColor: p.color || '#888' }]} />
+                        <Text style={[styles.playerRowName, !online && styles.playerRowNameOffline]}>
+                          {p.name || 'Anonyme'}
+                        </Text>
+                        {!online && <Text style={styles.playerRowStatus}>💤</Text>}
+                        <TouchableOpacity
+                          style={[styles.heartBtn, followed && styles.heartBtnActive]}
+                          onPress={() => toggleFollow(p.id)}
+                          activeOpacity={0.7}
+                        >
+                          <Heart
+                            size={18}
+                            color={followed ? '#ff4d6d' : THEME.text}
+                            fill={followed ? '#ff4d6d' : 'none'}
+                            strokeWidth={2}
+                          />
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })}
+                </ScrollView>
+              )}
+              <TouchableOpacity
+                style={styles.playersModalCloseBtn}
+                onPress={() => setPlayersListOpen(false)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.playersModalCloseBtnText}>Fermer</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableWithoutFeedback>
+        </View>
+      </TouchableWithoutFeedback>
+    </Modal>
+  );
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <StatusBar style="light" />
@@ -1164,7 +1246,7 @@ export default function App() {
 
         {moving && <TravelingBar eta={eta} onStop={stopMove} />}
 
-        {/* Modale de fin de trajet */}
+        {/* Modale fin de trajet */}
         <Modal
           visible={!!tripSummary}
           transparent
@@ -1177,8 +1259,6 @@ export default function App() {
               <Text style={styles.tripSummaryText}>
                 {tripSummary ? `${formatMeters(tripSummary.distancePx)} · ${formatDuration(Math.round(tripSummary.durationMs / 1000))}` : ''}
               </Text>
-
-              {/* Barre XP animée */}
               {tripSummary && (
                 <XPBar
                   totalDistancePx={tripSummary.startDistancePx + tripSummary.distancePx}
@@ -1186,7 +1266,6 @@ export default function App() {
                   animated
                 />
               )}
-
               {tripSummary?.pickedUpItems?.length > 0 && (
                 <View style={styles.tripSummaryPickups}>
                   <Text style={styles.tripSummaryPickupsTitle}>Vous avez trouvé :</Text>
@@ -1204,6 +1283,9 @@ export default function App() {
           </View>
         </Modal>
 
+        {/* Modale liste des joueurs */}
+        {renderPlayersListModal()}
+
         {showRecenterBtn && (
           <TouchableOpacity style={styles.recenterBtn} onPress={recenter} activeOpacity={0.75}>
             <Crosshair size={22} color={THEME.text} strokeWidth={2.2} />
@@ -1219,21 +1301,32 @@ export default function App() {
           </TouchableOpacity>
         )}
 
-        {viewport.w > 0 && otherPlayers.map((p) => {
-          const e = playerAnims.get(p.id);
-          if (!e) return null;
-          return (
-            <SmoothEdgeArrow key={`arr-${p.id}`} color={p.color}
-              playerX={e.x} playerY={e.y} camX={totalX} camY={totalY}
-              scaleVal={baseScale} W={viewport.w} H={viewport.h} />
-          );
-        })}
+        {/* Flèches uniquement pour les joueurs suivis */}
+        {viewport.w > 0 && otherPlayers
+          .filter((p) => followedPlayers.has(p.id))
+          .map((p) => {
+            const e = playerAnims.get(p.id);
+            if (!e) return null;
+            return (
+              <SmoothEdgeArrow key={`arr-${p.id}`} color={p.color}
+                playerX={e.x} playerY={e.y} camX={totalX} camY={totalY}
+                scaleVal={baseScale} W={viewport.w} H={viewport.h} />
+            );
+          })
+        }
 
+        {/* Badge en ligne — cliquable pour ouvrir la liste */}
         {profile && (
-          <View style={styles.onlineBadge} pointerEvents="none">
+          <TouchableOpacity
+            style={styles.onlineBadge}
+            onPress={() => setPlayersListOpen(true)}
+            activeOpacity={0.8}
+          >
             <View style={[styles.onlineDot, { backgroundColor: profile.color }]} />
-            <Text style={styles.onlineText}>{profile.name} · {otherPlayers.filter(isOnline).length} en ligne</Text>
-          </View>
+            <Text style={styles.onlineText}>
+              {profile.name} · {otherPlayers.filter(isOnline).length} en ligne
+            </Text>
+          </TouchableOpacity>
         )}
 
         <TouchableOpacity style={styles.inventoryBtn} onPress={() => setInventoryOpen(true)} activeOpacity={0.8}>
@@ -1381,73 +1474,83 @@ const styles = StyleSheet.create({
     ...THEME.shadow, shadowRadius: 12,
   },
   tripSummaryOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center', alignItems: 'center',
   },
   tripSummaryModal: {
-    backgroundColor: THEME.card,
-    borderWidth: 1.5,
-    borderColor: THEME.border,
-    borderRadius: THEME.radiusLg,
-    paddingHorizontal: 20,
-    paddingVertical: 24,
-    alignItems: 'stretch',
-    width: '88%',
-    maxWidth: 360,
-    ...THEME.shadow,
-    shadowRadius: 20,
+    backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border,
+    borderRadius: THEME.radiusLg, paddingHorizontal: 20, paddingVertical: 24,
+    alignItems: 'stretch', width: '88%', maxWidth: 360,
+    ...THEME.shadow, shadowRadius: 20,
   },
   tripSummaryTitle: {
-    color: THEME.text,
-    fontSize: 17,
-    fontWeight: '800',
-    marginBottom: 4,
-    textAlign: 'center',
+    color: THEME.text, fontSize: 17, fontWeight: '800',
+    marginBottom: 4, textAlign: 'center',
   },
   tripSummaryText: {
-    color: THEME.text,
-    fontSize: 14,
-    fontWeight: '600',
-    textAlign: 'center',
-    marginBottom: 12,
-    opacity: 0.7,
+    color: THEME.text, fontSize: 14, fontWeight: '600',
+    textAlign: 'center', marginBottom: 12, opacity: 0.7,
   },
   tripSummaryPickups: {
-    width: '100%',
-    backgroundColor: 'rgba(0,0,0,0.08)',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    marginBottom: 14,
-    alignItems: 'flex-start',
+    width: '100%', backgroundColor: 'rgba(0,0,0,0.08)',
+    borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10,
+    marginBottom: 14, alignItems: 'flex-start',
   },
   tripSummaryPickupsTitle: {
-    color: THEME.text,
-    fontSize: 13,
-    fontWeight: '700',
-    marginBottom: 6,
-    opacity: 0.9,
+    color: THEME.text, fontSize: 13, fontWeight: '700', marginBottom: 6, opacity: 0.9,
   },
   tripSummaryPickupLine: {
-    color: THEME.text,
-    fontSize: 13,
-    fontWeight: '400',
-    opacity: 0.8,
-    lineHeight: 20,
+    color: THEME.text, fontSize: 13, fontWeight: '400', opacity: 0.8, lineHeight: 20,
   },
   tripSummaryBtn: {
     backgroundColor: THEME.accent || '#3a7ea8',
-    paddingHorizontal: 32,
-    paddingVertical: 12,
-    borderRadius: 24,
-    alignItems: 'center',
-    marginTop: 4,
+    paddingHorizontal: 32, paddingVertical: 12, borderRadius: 24,
+    alignItems: 'center', marginTop: 4,
   },
-  tripSummaryBtnText: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '700',
+  tripSummaryBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  // --- Modale joueurs ---
+  playersModalOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-start', alignItems: 'flex-start',
+    paddingTop: TOP_SAFE + 48, paddingLeft: 16,
   },
+  playersModalCard: {
+    backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border,
+    borderRadius: THEME.radiusLg, paddingHorizontal: 16, paddingVertical: 16,
+    width: 280, maxWidth: '90%',
+    ...THEME.shadow, shadowRadius: 16,
+  },
+  playersModalTitle: {
+    color: THEME.text, fontSize: 15, fontWeight: '800',
+    marginBottom: 12, textAlign: 'center',
+  },
+  playersModalEmpty: {
+    color: THEME.text, fontSize: 13, opacity: 0.6,
+    textAlign: 'center', marginBottom: 12,
+  },
+  playerRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: THEME.border,
+  },
+  playerRowDot: {
+    width: 10, height: 10, borderRadius: 5, marginRight: 8,
+  },
+  playerRowName: {
+    flex: 1, color: THEME.text, fontSize: 13, fontWeight: '600',
+  },
+  playerRowNameOffline: { opacity: 0.5 },
+  playerRowStatus: { fontSize: 14, marginRight: 6 },
+  heartBtn: {
+    width: 36, height: 36, borderRadius: 18,
+    justifyContent: 'center', alignItems: 'center',
+    backgroundColor: 'transparent',
+  },
+  heartBtnActive: {
+    backgroundColor: 'rgba(255,77,109,0.12)',
+  },
+  playersModalCloseBtn: {
+    marginTop: 12, backgroundColor: THEME.accent || '#3a7ea8',
+    paddingVertical: 10, borderRadius: 20, alignItems: 'center',
+  },
+  playersModalCloseBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
 });
