@@ -5,7 +5,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   StyleSheet, View, Text, Dimensions, Animated, Easing,
-  TouchableWithoutFeedback, TouchableOpacity,
+  TouchableWithoutFeedback, TouchableOpacity, Modal,
 } from 'react-native';
 import {
   GestureHandlerRootView, PanGestureHandler, PinchGestureHandler, State,
@@ -178,7 +178,6 @@ export default function App() {
   // Récapitulatif de fin de trajet
   const [tripSummary, setTripSummary] = useState(null);
   const tripStartedAtRef = useRef(null);
-  const tripSummaryTimeoutRef = useRef(null);
 
   const globalNowRef = useRef(Date.now());
 
@@ -538,13 +537,6 @@ export default function App() {
     return () => { if (speedTimer.current) clearTimeout(speedTimer.current); };
   }, []);
 
-  // Nettoyage du timer du récapitulatif au démontage
-  useEffect(() => {
-    return () => {
-      if (tripSummaryTimeoutRef.current) clearTimeout(tripSummaryTimeoutRef.current);
-    };
-  }, []);
-
   const onPanGesture = Animated.event(
     [{ nativeEvent: { translationX: dx, translationY: dy } }],
     { useNativeDriver: true }
@@ -746,18 +738,15 @@ export default function App() {
   const progressRef = useRef(null);
   const progressListenerId = useRef(null);
 
-  // Affiche le récapitulatif de fin de trajet pendant 4 secondes
+  // Affiche le récapitulatif de fin de trajet (fermeture manuelle)
   const showTripSummary = (distancePx, durationMs) => {
-    if (tripSummaryTimeoutRef.current) clearTimeout(tripSummaryTimeoutRef.current);
     setTripSummary({
       distancePx: Math.max(0, Math.round(distancePx || 0)),
       durationMs: Math.max(0, Math.round(durationMs || 0)),
     });
-    tripSummaryTimeoutRef.current = setTimeout(() => {
-      setTripSummary(null);
-      tripSummaryTimeoutRef.current = null;
-    }, 4000);
   };
+
+  const dismissTripSummary = () => setTripSummary(null);
 
   const startMoveAlongCurve = (samples, length) => {
     if (!samples || samples.length < 2) return;
@@ -1142,13 +1131,25 @@ export default function App() {
 
         {moving && <TravelingBar eta={eta} onStop={stopMove} />}
 
-        {tripSummary && (
-          <View style={styles.tripSummaryBar} pointerEvents="none">
-            <Text style={styles.tripSummaryText}>
-              Trajet terminé · {formatMeters(tripSummary.distancePx)} · {formatDuration(Math.round(tripSummary.durationMs / 1000))}
-            </Text>
+        {/* Modale de fin de trajet — centrée, fermeture manuelle */}
+        <Modal
+          visible={!!tripSummary}
+          transparent
+          animationType="fade"
+          onRequestClose={dismissTripSummary}
+        >
+          <View style={styles.tripSummaryOverlay}>
+            <View style={styles.tripSummaryModal}>
+              <Text style={styles.tripSummaryTitle}>🏁 Trajet terminé</Text>
+              <Text style={styles.tripSummaryText}>
+                {tripSummary ? `${formatMeters(tripSummary.distancePx)} · ${formatDuration(Math.round(tripSummary.durationMs / 1000))}` : ''}
+              </Text>
+              <TouchableOpacity style={styles.tripSummaryBtn} onPress={dismissTripSummary} activeOpacity={0.8}>
+                <Text style={styles.tripSummaryBtnText}>Fermer</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        )}
+        </Modal>
 
         {showRecenterBtn && (
           <TouchableOpacity style={styles.recenterBtn} onPress={recenter} activeOpacity={0.75}>
@@ -1327,25 +1328,50 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
     ...THEME.shadow, shadowRadius: 12,
   },
-  tripSummaryBar: {
-    position: 'absolute',
-    left: 16,
-    right: 16,
-    bottom: 28,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: THEME.radiusLg,
+  // Modale fin de trajet
+  tripSummaryOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  tripSummaryModal: {
     backgroundColor: THEME.card,
     borderWidth: 1.5,
     borderColor: THEME.border,
+    borderRadius: THEME.radiusLg,
+    paddingHorizontal: 28,
+    paddingVertical: 28,
     alignItems: 'center',
+    minWidth: 260,
     ...THEME.shadow,
-    shadowRadius: 12,
+    shadowRadius: 20,
+  },
+  tripSummaryTitle: {
+    color: THEME.text,
+    fontSize: 17,
+    fontWeight: '800',
+    marginBottom: 8,
+    textAlign: 'center',
   },
   tripSummaryText: {
     color: THEME.text,
-    fontSize: 14,
-    fontWeight: '700',
+    fontSize: 15,
+    fontWeight: '600',
     textAlign: 'center',
+    marginBottom: 20,
+    opacity: 0.85,
+  },
+  tripSummaryBtn: {
+    backgroundColor: THEME.accent || '#3a7ea8',
+    paddingHorizontal: 32,
+    paddingVertical: 12,
+    borderRadius: 24,
+    alignItems: 'center',
+  },
+  tripSummaryBtnText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
   },
 });
