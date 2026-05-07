@@ -860,7 +860,10 @@ export default function App() {
       setTotalDistancePx((prev) => {
         const newTotal = prev + tripDistancePx;
         AsyncStorage.setItem(TOTAL_DISTANCE_KEY, newTotal.toString()).catch(() => {});
-        updateMyProfile({ totalDistancePx: newTotal }).catch(() => {});
+        const profileUpdate = updateMyProfile({ totalDistancePx: newTotal });
+        if (profileUpdate && typeof profileUpdate.catch === 'function') {
+          profileUpdate.catch(() => {});
+        }
         return newTotal;
       });
     }
