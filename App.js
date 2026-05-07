@@ -325,12 +325,10 @@ export default function App() {
           x: animX.__getValue(), y: animY.__getValue(),
         });
         if (!alive) return;
+        // À la connexion, on restaure totalDistancePx depuis Firebase uniquement.
         if (result && typeof result.totalDistancePx === 'number' && result.totalDistancePx > 0) {
-          setTotalDistancePx((prev) => {
-            const best = Math.max(prev, result.totalDistancePx);
-            AsyncStorage.setItem(TOTAL_DISTANCE_KEY, best.toString()).catch(() => {});
-            return best;
-          });
+          setTotalDistancePx(result.totalDistancePx);
+          AsyncStorage.setItem(TOTAL_DISTANCE_KEY, result.totalDistancePx.toString()).catch(() => {});
         }
         unsub = subscribePlayers((list) => setOtherPlayers(list));
       } catch (e) {
@@ -481,15 +479,6 @@ export default function App() {
     if (!inventoryLoaded) return;
     AsyncStorage.setItem(INVENTORY_KEY, JSON.stringify(inventory)).catch(() => {});
   }, [inventory, inventoryLoaded]);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const raw = await AsyncStorage.getItem(TOTAL_DISTANCE_KEY);
-        if (raw) setTotalDistancePx(parseInt(raw) || 0);
-      } catch (e) {}
-    })();
-  }, []);
 
   useEffect(() => {
     const id = setInterval(() => { globalNowRef.current = Date.now(); }, 5000);
