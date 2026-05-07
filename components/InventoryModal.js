@@ -28,16 +28,6 @@ const formatDate = (ts) => {
 // ─── Composant principal ──────────────────────────────────────────────────────
 export default function InventoryModal({ items, totalDistancePx, onClose, onMarkRead, onDelete }) {
   const [openId, setOpenId] = useState(null);
-  const [collapsedAuthors, setCollapsedAuthors] = useState({});
-
-  const toggleAuthor = (authorId) => {
-    setCollapsedAuthors((prev) => ({ ...prev, [authorId]: !prev[authorId] }));
-  };
-
-  const openMsg = (l) => {
-    setOpenId(l.id);
-    if (l.unread) onMarkRead(l.id);
-  };
 
   const groupsMap = {};
   for (const l of (items || [])) {
@@ -61,6 +51,20 @@ export default function InventoryModal({ items, totalDistancePx, onClose, onMark
   groups.forEach((g) => {
     g.messages.sort((a, b) => (b.pickedAt || 0) - (a.pickedAt || 0));
   });
+
+  // Tous les groupes repliés par défaut
+  const initialCollapsed = {};
+  groups.forEach((g) => { initialCollapsed[g.authorId] = true; });
+  const [collapsedAuthors, setCollapsedAuthors] = useState(initialCollapsed);
+
+  const toggleAuthor = (authorId) => {
+    setCollapsedAuthors((prev) => ({ ...prev, [authorId]: !prev[authorId] }));
+  };
+
+  const openMsg = (l) => {
+    setOpenId(l.id);
+    if (l.unread) onMarkRead(l.id);
+  };
 
   const total = (items || []).length;
 
