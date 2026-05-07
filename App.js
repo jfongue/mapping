@@ -47,6 +47,11 @@ import { sampleAt } from './src/smoothing';
 import TileLayer, { MAP_W_PX, MAP_H_PX } from './components/TileLayer';
 import DottedTrail from './components/DottedTrail';
 import XPBar from './components/XPBar';
+import PathLayer from './components/PathLayer';
+
+// --- Sillons ---
+import { useSillons } from './src/hooks/useSillons';
+import { avgSillonSpeedMul } from './src/movement';
 
 const WATER_COLOR = '#bce0e8';
 
@@ -148,6 +153,7 @@ export default function App() {
 
   const [speedLvl, setSpeedLvl] = useState(0);
   const [debugEnabled, setDebugEnabled] = useState(false);
+  const [showPathLayer, setShowPathLayer] = useState(true);
   const speedMul = SPEED_LEVELS[speedLvl];
   const speedTimer = useRef(null);
 
@@ -193,6 +199,17 @@ export default function App() {
   // --- Suivi de joueurs ---
   const [followedPlayers, setFollowedPlayers] = useState(new Set());
   const [playersListOpen, setPlayersListOpen] = useState(false);
+
+  // --- Sillons ---
+  const {
+    sillons,
+    onTripStart,
+    onTripEnd,
+    debugBoost,
+    debugFastErosion,
+    debugReset,
+    debugStats,
+  } = useSillons();
 
   // Persiste les joueurs suivis
   useEffect(() => {
@@ -325,7 +342,6 @@ export default function App() {
           x: animX.__getValue(), y: animY.__getValue(),
         });
         if (!alive) return;
-        // À la connexion, on restaure totalDistancePx depuis Firebase uniquement.
         if (result && typeof result.totalDistancePx === 'number' && result.totalDistancePx > 0) {
           setTotalDistancePx(result.totalDistancePx);
           AsyncStorage.setItem(TOTAL_DISTANCE_KEY, result.totalDistancePx.toString()).catch(() => {});
@@ -560,7 +576,7 @@ export default function App() {
     const last = samples[samples.length - 1];
     const fx = Math.floor(last.x / TILE_PX);
     const fy = Math.floor(last.y / TILE_PX);
-    const cellPath = findPath(TILES_DATA, MAP_W, MAP_H, sx, sy, fx, fy);
+    const cellPath = findPath(TILES_DATA, MAP_W, MAP_H, sx, sy, fx, fy, sillons);
     if (!cellPath) return;
     const { samples: newSamples, length } = buildStraightPath(cellPath, { x: cx, y: cy });
     activePathRef.current = newSamples;
@@ -706,7 +722,8 @@ export default function App() {
     const sy = Math.floor(pos.y / TILE_PX);
     const tx2 = Math.floor(goalX / TILE_PX);
     const ty2 = Math.floor(goalY / TILE_PX);
-    const cellPath = findPath(TILES_DATA, MAP_W, MAP_H, sx, sy, tx2, ty2);
+    // Pathfinding avec sillons pour favoriser les chemins battus
+    const cellPath = findPath(TILES_DATA, MAP_W, MAP_H, sx, sy, tx2, ty2, sillons);
     if (!cellPath) return;
     const { samples, length } = buildStraightPath(cellPath, pos);
     const finalPx = samples[samples.length - 1];
@@ -751,6 +768,7 @@ export default function App() {
     pendingPickupRef.current = pendingTarget.pickupLetter || null;
     setPendingTarget(null);
     setTarget({ x: pendingTarget.x, y: pendingTarget.y });
+    onTripStart(); // pause erosion sillons
     startMoveAlongCurve(samples, length);
   };
 
@@ -785,9 +803,11 @@ export default function App() {
 
   const startMoveAlongCurve = (samples, length) => {
     if (!samples || samples.length < 2) return;
+    // Vitesse modulee par les sillons sur ce chemin
+    const sillonMul = avgSillonSpeedMul(samples, sillons, TILES_DATA, MAP_W);
     const baseDuration = Math.max(
       MIN_DURATION_MS,
-      Math.min(MAX_DURATION_MS, (length / SPEED_PX_PER_SEC) * 1000)
+      Math.min(MAX_DURATION_MS, (length / (SPEED_PX_PER_SEC * sillonMul)) * 1000)
     );
     const dur = baseDuration / speedMul;
     moveTarget.current = samples[samples.length - 1];
@@ -854,6 +874,15 @@ export default function App() {
     moveTarget.current = null;
     tripStartedAtRef.current = null;
     tripTotalLengthRef.current = 0;
+
+    // Incrementer les sillons sur le chemin parcouru
+    if (frozenActivePath && frozenActivePath.length > 0) {
+      const cellPath = frozenActivePath.map((p) => ({
+        x: Math.floor(p.x / TILE_PX),
+        y: Math.floor(p.y / TILE_PX),
+      }));
+      onTripEnd(cellPath);
+    }
 
     const pickup = pendingPickupRef.current;
     pendingPickupRef.current = null;
@@ -1021,6 +1050,13 @@ export default function App() {
     }
   };
 
+  const handleDebugBoostSillons = () => {
+    const cx = Math.floor(pos.x / TILE_PX);
+    const cy = Math.floor(pos.y / TILE_PX);
+    debugBoost(cx, cy, 5, 80);
+    setSettingsOpen(false);
+  };
+
   const onSpeedPressIn = () => {
     setSpeedLvl(1);
     let lvl = 1;
@@ -1059,9 +1095,10 @@ export default function App() {
 
   const previewStats = pendingTarget ? (() => {
     const length = pendingTarget.length || 0;
+    const sillonMul = avgSillonSpeedMul(pendingTarget.samples, sillons, TILES_DATA, MAP_W);
     const durMs = Math.max(
       MIN_DURATION_MS,
-      Math.min(MAX_DURATION_MS, (length / SPEED_PX_PER_SEC) * 1000)
+      Math.min(MAX_DURATION_MS, (length / (SPEED_PX_PER_SEC * sillonMul)) * 1000)
     ) / Math.max(1, speedMul);
     return { dist: Math.round(length), durSec: Math.round(durMs / 1000) };
   })() : null;
@@ -1079,7 +1116,7 @@ export default function App() {
           <TouchableWithoutFeedback onPress={() => {}}>
             <View style={styles.playersModalCard}>
               <Text style={styles.playersModalTitle}>
-                👥 Joueurs en ligne ({otherPlayers.filter(isOnline).length})
+                {`\uD83D\uDC65`} Joueurs en ligne ({otherPlayers.filter(isOnline).length})
               </Text>
               {otherPlayers.length === 0 ? (
                 <Text style={styles.playersModalEmpty}>Aucun autre joueur connecté</Text>
@@ -1094,7 +1131,7 @@ export default function App() {
                         <Text style={[styles.playerRowName, !online && styles.playerRowNameOffline]}>
                           {p.name || 'Anonyme'}
                         </Text>
-                        {!online && <Text style={styles.playerRowStatus}>💤</Text>}
+                        {!online && <Text style={styles.playerRowStatus}>{`\uD83D\uDCA4`}</Text>}
                         <TouchableOpacity
                           style={[styles.heartBtn, followed && styles.heartBtnActive]}
                           onPress={() => toggleFollow(p.id)}
@@ -1141,6 +1178,8 @@ export default function App() {
                   <TouchableWithoutFeedback onPress={handleTap}>
                     <View style={StyleSheet.absoluteFill}>
                       <TileLayer />
+                      {/* Sillons visuels — chemins battus */}
+                      {showPathLayer && <PathLayer sillons={sillons} />}
                       {pendingTarget && (
                         <DottedTrail samples={pendingTarget.samples} color="#3a7ea8" spacing={26} size={6} opacity={0.95} />
                       )}
@@ -1244,7 +1283,7 @@ export default function App() {
         >
           <View style={styles.tripSummaryOverlay}>
             <View style={styles.tripSummaryModal}>
-              <Text style={styles.tripSummaryTitle}>🏁 Trajet terminé</Text>
+              <Text style={styles.tripSummaryTitle}>{`\uD83C\uDFC1`} Trajet terminé</Text>
               <Text style={styles.tripSummaryText}>
                 {tripSummary ? `${formatMeters(tripSummary.distancePx)} · ${formatDuration(Math.round(tripSummary.durationMs / 1000))}` : ''}
               </Text>
@@ -1286,7 +1325,7 @@ export default function App() {
             style={[styles.speedBtn, speedMul > 1 && styles.speedBtnActive]}
             onPressIn={onSpeedPressIn} onPressOut={onSpeedPressOut} activeOpacity={0.8}
           >
-            <Text style={styles.speedText}>⏩ {speedMul}×</Text>
+            <Text style={styles.speedText}>{`\u23E9`} {speedMul}{`\xD7`}</Text>
           </TouchableOpacity>
         )}
 
@@ -1304,7 +1343,7 @@ export default function App() {
           })
         }
 
-        {/* Badge en ligne — cliquable pour ouvrir la liste */}
+        {/* Badge en ligne */}
         {profile && (
           <TouchableOpacity
             style={styles.onlineBadge}
@@ -1355,7 +1394,14 @@ export default function App() {
           <SettingsModal profile={profile} draftName={draftName} setDraftName={setDraftName}
             onPatch={saveProfile} debugEnabled={debugEnabled} onToggleDebug={onToggleDebug}
             onClose={() => setSettingsOpen(false)} onValidateName={validateName}
-            onDebugGenerateMessage={handleDebugGenerateMessage} />
+            onDebugGenerateMessage={handleDebugGenerateMessage}
+            onDebugBoostSillons={handleDebugBoostSillons}
+            onDebugFastErosion={() => { debugFastErosion(7); setSettingsOpen(false); }}
+            onDebugResetSillons={() => { debugReset(); setSettingsOpen(false); }}
+            sillonsStats={debugEnabled ? debugStats() : null}
+            showPathLayer={showPathLayer}
+            onTogglePathLayer={() => setShowPathLayer((v) => !v)}
+          />
         )}
         {selectedPlayer && <PlayerDetailModal player={selectedPlayer} onClose={() => setSelectedPlayer(null)} />}
         {letterWriteOpen && (
@@ -1497,7 +1543,6 @@ const styles = StyleSheet.create({
     alignItems: 'center', marginTop: 4,
   },
   tripSummaryBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
-  // --- Modale joueurs ---
   playersModalOverlay: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.45)',
     justifyContent: 'flex-start', alignItems: 'flex-start',
