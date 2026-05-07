@@ -7,7 +7,7 @@
 
 import { initializeApp } from 'firebase/app';
 import {
-  getDatabase, ref, set, update, remove, push,
+  getDatabase, ref, set, update, remove, push, get,
   onValue, onDisconnect, serverTimestamp,
 } from 'firebase/database';
 
@@ -37,10 +37,27 @@ function ensureInit() {
   db = getDatabase(app);
 }
 
+/**
+ * Rejoint le multijoueur et retourne { totalDistancePx } lu depuis Firebase
+ * pour permettre à App.js de restaurer la valeur distante.
+ */
 export async function joinMultiplayer({ playerId, name, color, x, y, outfit, skin, hair, hat }) {
   ensureInit();
   myId = playerId;
   myRef = ref(db, `players/${playerId}`);
+
+  // Lire d'abord les données existantes pour préserver totalDistancePx
+  let existingTotalDistancePx = 0;
+  try {
+    const snap = await get(myRef);
+    if (snap.exists()) {
+      const data = snap.val();
+      if (typeof data.totalDistancePx === 'number') {
+        existingTotalDistancePx = data.totalDistancePx;
+      }
+    }
+  } catch (e) {}
+
   await update(myRef, {
     id: playerId, name, color,
     x, y,
@@ -59,6 +76,8 @@ export async function joinMultiplayer({ playerId, name, color, x, y, outfit, ski
     latestPlayers = list;
     for (const cb of listeners) cb(list);
   });
+
+  return { totalDistancePx: existingTotalDistancePx };
 }
 
 export function updateMyPosition(x, y) {
@@ -77,9 +96,13 @@ export function announceMove({ from, to, startTs, durationMs }) {
   }).catch(() => {});
 }
 
+/**
+ * Met à jour le profil du joueur dans Firebase.
+ * Retourne toujours une Promise (jamais undefined).
+ */
 export function updateMyProfile(patch) {
-  if (!myRef) return;
-  update(myRef, { ...patch, lastSeen: Date.now() }).catch(() => {});
+  if (!myRef) return Promise.resolve();
+  return update(myRef, { ...patch, lastSeen: Date.now() }).catch(() => {});
 }
 
 export function clearMyMove(finalX, finalY) {
