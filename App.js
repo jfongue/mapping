@@ -45,7 +45,6 @@ import { TILES_DATA, MAP_W, MAP_H, TILE_PX, WALKABLE, findPath } from './src/til
 import { sampleAt } from './src/smoothing';
 import TileLayer, { MAP_W_PX, MAP_H_PX } from './components/TileLayer';
 import DottedTrail from './components/DottedTrail';
-import XPBar from './components/XPBar';
 
 const WATER_COLOR = '#bce0e8';
 
@@ -1067,7 +1066,6 @@ export default function App() {
                   <TouchableWithoutFeedback onPress={handleTap}>
                     <View style={StyleSheet.absoluteFill}>
                       <TileLayer />
-                      <XPBar totalDistancePx={totalDistancePx} />
                       {pendingTarget && (
                         <DottedTrail samples={pendingTarget.samples} color="#3a7ea8" spacing={26} size={6} opacity={0.95} />
                       )}
@@ -1270,7 +1268,7 @@ export default function App() {
         )}
         {readingLetter && <LetterReadModal letter={readingLetter} onClose={closeReadingLetter} />}
         {inventoryOpen && (
-          <InventoryModal items={inventory} onClose={() => setInventoryOpen(false)}
+          <InventoryModal items={inventory} totalDistancePx={totalDistancePx} onClose={() => setInventoryOpen(false)}
             onMarkRead={(id) => setInventory((prev) => prev.map((l) => l.id === id ? { ...l, unread: false } : l))}
             onDelete={(id) => setInventory((prev) => prev.filter((l) => l.id !== id))} />
         )}
