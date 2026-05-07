@@ -95,26 +95,37 @@ Jeu mobile (Android/iOS) d'exploration **contemplatif / idle**.
 - **Mini-carte permanente** coin droit (terrain simplifié + POI visités + autres joueurs + perso)
 - **Panneau quêtes** coin gauche (3 quêtes max, ✓ animé)
 - **Brouillard de guerre** persisté (cells révélées au passage, rayon 3 cells, overlay noir 85%)
-- **Modal rapport d'arrivée** : mini-map du trajet style Strava (ligne rouge + pièces ramassées + start blanc + end rouge), distance, durée, pièces, coffres ouverts, POI découverts
+- **Modal rapport d'arrivée** : mini-map du trajet style Strava (ligne rouge + pièces ramassées + start blanc + end rouge), distance, durée, pièces, coffres ouverts, POI découverts — **refactorisé en liste simple sans aperçu texte** (fix lisibilité)
 - **Pulse spring** du perso à l'arrivée
 
-### 4.5 Multi
+### 4.5 Système XP / Distance marchée *(nouveau — 7 mai 2026)*
+
+- **XPBar** : barre en bas d'écran affichant la distance totale marchée en **lieues**
+- La distance est accumulée trajet par trajet dans `totalDistancePx` (persisté en AsyncStorage et synchronisé Firebase)
+- La longueur totale du trajet est capturée dans `tripTotalLengthRef` au **départ** (et non à l'arrivée) pour éviter les bugs si le chemin change en cours de route (ex : changement de vitesse)
+- `XPBar` s'anime depuis 0 à chaque mise à jour (animation spring)
+- **XP affiché dans la modale de fin de trajet** : le gain de distance est animé dans le recap
+- `updateMyProfile` est désormais une **Promise** (fix Firebase) ; appel sécurisé avec guard dans `finalizeArrival`
+- `joinMultiplayer` restore `totalDistancePx` depuis Firebase pour cohérence cross-session
+
+### 4.6 Multi
 
 - Service abstrait `multiplayer` avec 2 implémentations interchangeables
 - **MockMultiplayer** par défaut : 3 joueurs fakes (Théo/Léa/Max) avec mouvement en cycle 1.5s, rebond aux limites
 - **FirebaseMultiplayer** : Realtime DB, position throttlée 250ms, `onDisconnect` cleanup auto, à activer via `USE_FIREBASE = true` + config
 - **Pseudo** + couleur aléatoire + UUID anonyme
 - Affichage live des autres joueurs avec **interpolation 1.4s** entre updates (pour rendu smooth)
+- `totalDistancePx` du joueur **syncé dans son profil Firebase** à chaque arrivée
 
-### 4.6 Persistance
+### 4.7 Persistance
 
 - AsyncStorage **debounced 500ms**
-- Save : `pos`, `collected`, `coins`, `openedChests`, `visited` (POI), `quests`, `explored` (brouillard)
+- Save : `pos`, `collected`, `coins`, `openedChests`, `visited` (POI), `quests`, `explored` (brouillard), **`totalDistancePx`** *(nouveau)*
 - Profil séparé : `id` / `name` / `color`
 - Flag `firstLaunch` séparé
 - Bouton **reset ↺** (efface tout sauf profil)
 
-### 4.7 Tests (Jest)
+### 4.8 Tests (Jest)
 
 - Configuré : env node, `babel preset-env` en mode test uniquement (n'interfère pas avec Expo)
 - ~60 tests sur logique pure :
@@ -142,6 +153,7 @@ Jeu mobile (Android/iOS) d'exploration **contemplatif / idle**.
 9. **Pas de feedback sensoriel** : pas de son, pas de vibration, pas de particules à l'arrivée
 10. **Map peu lisible** : tout vert, pas de biomes marquants (forêt, désert, plage), on ne se souvient pas où on est allé
 11. **Pas d'inventaire** : juste un compteur de pièces
+12. **XP = distance uniquement** : la XPBar affiche des lieues mais n'est pas encore branchée sur un système de niveau/récompense
 
 ---
 
@@ -150,7 +162,7 @@ Jeu mobile (Android/iOS) d'exploration **contemplatif / idle**.
 À ajouter pour un test utilisateur sérieux :
 
 - **Shop** dans villages : boosts vitesse, rayon collecte, fragments de carte
-- **Système niveau/XP** : chaque trajet donne XP, niveau débloque trucs
+- **Système niveau/XP** : chaque trajet donne XP, niveau débloque trucs *(base posée avec totalDistancePx)*
 - **PNJ dans POI** : 1 dialogue court par POI + mini-quête déclenchée
 - **Événements aléatoires** en route : 20% chance par trajet, choix A/B avec gain/perte
 - **Inventaire basique** : pièces, clés, fragments, potions
@@ -167,6 +179,7 @@ Estimation : ~1 semaine de dev pour ce MVP.
 - Tests Jest via `npm test` (pas encore exécutés en bout, mais syntaxe vérifiée)
 - Multi en **mode mock** par défaut (Firebase prêt mais nécessite credentials utilisateur)
 - APK build dispo via `eas build -p android --profile preview` (compte Expo configuré, projectId actif : `adb81213-682e-45cb-a971-24976671f4a1`)
+- **XPBar fonctionnelle** avec distance persistée et synchro Firebase (ajout 7 mai 2026)
 
 ---
 
@@ -180,6 +193,7 @@ Estimation : ~1 semaine de dev pour ce MVP.
 6. **Modèle économique** : free-to-play ? IAP cosmétiques ? Premium one-shot ?
 7. **Cycle de jeu** : quelle durée moyenne d'une session ? (1 trajet de 3min ? plusieurs sessions courtes/jour ?)
 8. **Compétition vs coopération** : classement global, guildes, raids, ou purement individuel ?
+9. **XPBar → Niveaux** : transformer `totalDistancePx` en vrai système de niveaux avec paliers et récompenses ?
 
 ---
 
