@@ -22,10 +22,7 @@ export default function useFollowed() {
         } else {
           next = [...prev, { id: player.id, name: player.name, color: player.color }];
         }
-        // Sync Firebase (best-effort)
-        try {
-          updateMyProfile({ followedPlayers: next });
-        } catch (e) {}
+        try { updateMyProfile({ followedPlayers: next }); } catch (e) {}
         return next;
       });
     },

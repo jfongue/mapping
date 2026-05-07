@@ -1,11 +1,12 @@
-// Modal détail d'un autre joueur (clic sur sa boule).
+// Modal détail d'un autre joueur (clic sur sa boule) + bouton Suivre.
 import React from 'react';
 import {
   StyleSheet, View, Text,
   TouchableWithoutFeedback, TouchableOpacity,
 } from 'react-native';
+import { Heart } from 'lucide-react-native';
 
-export default function PlayerDetailModal({ player, onClose }) {
+export default function PlayerDetailModal({ player, onClose, isFollowed, onToggleFollow }) {
   if (!player) return null;
   const remaining = player.target
     ? Math.max(0, Math.ceil((player.target.startTs + player.target.durationMs - Date.now()) / 1000))
@@ -13,6 +14,7 @@ export default function PlayerDetailModal({ player, onClose }) {
   const dist = player.target
     ? Math.round(Math.hypot(player.target.toX - player.target.fromX, player.target.toY - player.target.fromY))
     : 0;
+  const followed = isFollowed ? isFollowed(player.id) : false;
   return (
     <View style={styles.overlay}>
       <TouchableWithoutFeedback onPress={onClose}>
@@ -32,6 +34,26 @@ export default function PlayerDetailModal({ player, onClose }) {
         ) : (
           <Text style={[styles.label, { marginTop: 12 }]}>À l'arrêt</Text>
         )}
+
+        {onToggleFollow && (
+          <TouchableOpacity
+            onPress={() => onToggleFollow(player)}
+            style={[styles.followBtn, followed && styles.followBtnActive]}
+            activeOpacity={0.75}
+          >
+            <Heart
+              size={16}
+              color={followed ? '#fff' : '#ff6b6b'}
+              fill={followed ? '#fff' : 'none'}
+              strokeWidth={2.2}
+              style={{ marginRight: 6 }}
+            />
+            <Text style={[styles.followBtnText, followed && styles.followBtnTextActive]}>
+              {followed ? 'Suivi ✓' : 'Suivre ❤️'}
+            </Text>
+          </TouchableOpacity>
+        )}
+
         <TouchableOpacity onPress={onClose} style={styles.close}>
           <Text style={styles.closeText}>Fermer</Text>
         </TouchableOpacity>
@@ -55,8 +77,16 @@ const styles = StyleSheet.create({
   id: { fontSize: 11, color: '#888', marginTop: 4 },
   label: { fontSize: 13, color: '#666', marginTop: 4 },
   value: { fontSize: 16, fontWeight: '600', color: '#1a1a2e' },
+  followBtn: {
+    flexDirection: 'row', alignItems: 'center',
+    marginTop: 16, borderWidth: 1.5, borderColor: '#ff6b6b',
+    paddingHorizontal: 20, paddingVertical: 9, borderRadius: 20,
+  },
+  followBtnActive: { backgroundColor: '#ff6b6b', borderColor: '#ff6b6b' },
+  followBtnText: { fontSize: 14, fontWeight: '700', color: '#ff6b6b' },
+  followBtnTextActive: { color: '#fff' },
   close: {
-    marginTop: 18, backgroundColor: '#ff6b6b',
+    marginTop: 12, backgroundColor: '#ff6b6b',
     paddingHorizontal: 24, paddingVertical: 10, borderRadius: 10,
   },
   closeText: { color: '#fff', fontSize: 14, fontWeight: '700' },
