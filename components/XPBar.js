@@ -48,7 +48,7 @@ export default function XPBar({ totalDistancePx, gainPx = 0 }) {
   const { current, next, lieues, progress } = getLevelInfo(after);
   const { progress: progressBefore } = getLevelInfo(before);
 
-  const barAnim = useRef(new Animated.Value(gainPx > 0 ? progressBefore : progress)).current;
+  const barAnim = useRef(new Animated.Value(gainPx > 0 ? progressBefore : 0)).current;
   const glowAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -56,7 +56,7 @@ export default function XPBar({ totalDistancePx, gainPx = 0 }) {
       // Démarre depuis la valeur avant le gain, puis remplit jusqu'à la valeur finale
       barAnim.setValue(progressBefore);
       Animated.sequence([
-        Animated.delay(200),
+        Animated.delay(400),
         Animated.timing(barAnim, {
           toValue: progress,
           duration: 900,
@@ -72,6 +72,8 @@ export default function XPBar({ totalDistancePx, gainPx = 0 }) {
         { iterations: 3 }
       ).start();
     } else {
+      // Forcer le départ de 0 pour animer à chaque ouverture (ex: InventoryModal)
+      barAnim.setValue(0);
       Animated.timing(barAnim, {
         toValue: progress,
         duration: 700,
@@ -85,7 +87,6 @@ export default function XPBar({ totalDistancePx, gainPx = 0 }) {
 
   // Calcul du gain en lieues
   const gainLieues = Math.floor((gainPx || 0) / PX_PER_LIEUE);
-  const gainRem    = Math.round(((gainPx || 0) % PX_PER_LIEUE));
 
   return (
     <View style={styles.container}>
@@ -103,7 +104,9 @@ export default function XPBar({ totalDistancePx, gainPx = 0 }) {
         </View>
         {gainPx > 0 && (
           <View style={styles.gainBadge}>
-            <Text style={styles.gainText}>+{gainLieues > 0 ? `${gainLieues} lieues` : `${gainRem} px`}</Text>
+            <Text style={styles.gainText}>
+              +{gainLieues > 0 ? `${gainLieues} lieue${gainLieues > 1 ? 's' : ''}` : `${Math.round(gainPx)} px`}
+            </Text>
           </View>
         )}
         {current.level === 10 && <Text style={styles.crown}>👑</Text>}
