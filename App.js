@@ -2,7 +2,7 @@
 // Logique pure dans /src, composants UI dans /components.
 // App.js orchestre uniquement : état React, gestes, animations natives.
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   StyleSheet, View, Text, Dimensions, Animated, Easing,
   TouchableWithoutFeedback, TouchableOpacity, Modal, ScrollView,
@@ -28,7 +28,6 @@ import {
 } from './src/constants';
 import { THEME } from './src/theme';
 
-// --- Notifications ---
 import {
   requestNotificationPermissions,
   scheduleArrivalNotification,
@@ -49,7 +48,6 @@ import DottedTrail from './components/DottedTrail';
 import XPBar from './components/XPBar';
 import PathLayer from './components/PathLayer';
 
-// --- Sillons ---
 import { useSillons } from './src/hooks/useSillons';
 import { avgSillonSpeedMul } from './src/movement';
 
@@ -196,11 +194,9 @@ export default function App() {
 
   const pinchListenerId = useRef(null);
 
-  // --- Suivi de joueurs ---
   const [followedPlayers, setFollowedPlayers] = useState(new Set());
   const [playersListOpen, setPlayersListOpen] = useState(false);
 
-  // --- Sillons ---
   const {
     sillons,
     onTripStart,
@@ -211,7 +207,6 @@ export default function App() {
     debugStats,
   } = useSillons();
 
-  // Persiste les joueurs suivis
   useEffect(() => {
     (async () => {
       try {
@@ -227,11 +222,8 @@ export default function App() {
   const toggleFollow = (playerId) => {
     setFollowedPlayers((prev) => {
       const next = new Set(prev);
-      if (next.has(playerId)) {
-        next.delete(playerId);
-      } else {
-        next.add(playerId);
-      }
+      if (next.has(playerId)) next.delete(playerId);
+      else next.add(playerId);
       AsyncStorage.setItem(FOLLOWED_PLAYERS_KEY, JSON.stringify([...next])).catch(() => {});
       return next;
     });
@@ -278,17 +270,12 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (moving && !userHasPanned.current) {
-      startFollowLoop();
-    } else {
-      stopFollowLoop();
-    }
+    if (moving && !userHasPanned.current) startFollowLoop();
+    else stopFollowLoop();
     return stopFollowLoop;
   }, [moving]);
 
-  useEffect(() => {
-    requestNotificationPermissions();
-  }, []);
+  useEffect(() => { requestNotificationPermissions(); }, []);
 
   useEffect(() => {
     (async () => {
@@ -347,9 +334,7 @@ export default function App() {
           AsyncStorage.setItem(TOTAL_DISTANCE_KEY, result.totalDistancePx.toString()).catch(() => {});
         }
         unsub = subscribePlayers((list) => setOtherPlayers(list));
-      } catch (e) {
-        console.warn('multi join failed', e);
-      }
+      } catch (e) { console.warn('multi join failed', e); }
     })();
     return () => {
       alive = false;
@@ -363,7 +348,6 @@ export default function App() {
     for (const p of otherPlayers) {
       if (typeof p.x !== 'number' || typeof p.y !== 'number') continue;
       seen.add(p.id);
-
       let entry = playerAnims.get(p.id);
       let isNew = false;
       if (!entry) {
@@ -371,81 +355,47 @@ export default function App() {
         const lerped = p.target ? lerpFromTarget(p.target) : null;
         const startX = lerped?.x ?? p.x;
         const startY = lerped?.y ?? p.y;
-        entry = {
-          x: new Animated.Value(startX),
-          y: new Animated.Value(startY),
-          anim: null,
-          lastKey: '',
-        };
+        entry = { x: new Animated.Value(startX), y: new Animated.Value(startY), anim: null, lastKey: '' };
         playerAnims.set(p.id, entry);
       }
-
-      const key = p.target
-        ? `${p.target.startTs}-${p.target.toX}-${p.target.toY}`
-        : `static-${p.x}-${p.y}`;
+      const key = p.target ? `${p.target.startTs}-${p.target.toX}-${p.target.toY}` : `static-${p.x}-${p.y}`;
       if (!isNew && key === entry.lastKey) continue;
       entry.lastKey = key;
       if (entry.anim) entry.anim.stop();
-
       if (p.target) {
         const t = p.target;
-        const fromTx = Math.floor(t.fromX / TILE_PX);
-        const fromTy = Math.floor(t.fromY / TILE_PX);
-        const toTx = Math.floor(t.toX / TILE_PX);
-        const toTy = Math.floor(t.toY / TILE_PX);
-        const cellPath = findPath(TILES_DATA, MAP_W, MAP_H, fromTx, fromTy, toTx, toTy);
-
+        const cellPath = findPath(TILES_DATA, MAP_W, MAP_H, Math.floor(t.fromX / TILE_PX), Math.floor(t.fromY / TILE_PX), Math.floor(t.toX / TILE_PX), Math.floor(t.toY / TILE_PX));
         let samples;
         if (cellPath && cellPath.length >= 2) {
-          samples = cellPath.map((c) => ({
-            x: c.x * TILE_PX + TILE_PX / 2,
-            y: c.y * TILE_PX + TILE_PX / 2,
-          }));
+          samples = cellPath.map((c) => ({ x: c.x * TILE_PX + TILE_PX / 2, y: c.y * TILE_PX + TILE_PX / 2 }));
           samples[0] = { x: t.fromX, y: t.fromY };
           samples[samples.length - 1] = { x: t.toX, y: t.toY };
         } else {
-          samples = [
-            { x: t.fromX, y: t.fromY },
-            { x: t.toX, y: t.toY },
-          ];
+          samples = [{ x: t.fromX, y: t.fromY }, { x: t.toX, y: t.toY }];
         }
-
         const cum = [0];
         let total = 0;
         for (let i = 1; i < samples.length; i++) {
           total += Math.hypot(samples[i].x - samples[i - 1].x, samples[i].y - samples[i - 1].y);
           cum.push(total);
         }
-
         const elapsed = Math.max(0, Date.now() - t.startTs);
         const frac = total > 0 ? Math.min(1, elapsed / t.durationMs) : 1;
-
         if (frac >= 1) {
-          entry.x.setValue(t.toX);
-          entry.y.setValue(t.toY);
-          entry.anim = null;
+          entry.x.setValue(t.toX); entry.y.setValue(t.toY); entry.anim = null;
         } else {
           const elapsedDist = frac * total;
           let seg = 1;
           while (seg < cum.length && cum[seg] < elapsedDist) seg++;
-          const a = samples[seg - 1];
-          const b = samples[seg];
+          const a = samples[seg - 1], b = samples[seg];
           const segLen = cum[seg] - cum[seg - 1];
           const tInSeg = segLen > 0 ? (elapsedDist - cum[seg - 1]) / segLen : 0;
-          const startX = a.x + (b.x - a.x) * tInSeg;
-          const startY = a.y + (b.y - a.y) * tInSeg;
-          entry.x.setValue(startX);
-          entry.y.setValue(startY);
-
+          entry.x.setValue(a.x + (b.x - a.x) * tInSeg);
+          entry.y.setValue(a.y + (b.y - a.y) * tInSeg);
           const steps = [];
           const firstSegRemaining = segLen * (1 - tInSeg);
-          if (firstSegRemaining > 0) {
-            steps.push({ x: b.x, y: b.y, dist: firstSegRemaining });
-          }
-          for (let i = seg + 1; i < samples.length; i++) {
-            steps.push({ x: samples[i].x, y: samples[i].y, dist: cum[i] - cum[i - 1] });
-          }
-
+          if (firstSegRemaining > 0) steps.push({ x: b.x, y: b.y, dist: firstSegRemaining });
+          for (let i = seg + 1; i < samples.length; i++) steps.push({ x: samples[i].x, y: samples[i].y, dist: cum[i] - cum[i - 1] });
           const remainingMs = Math.max(50, t.durationMs - elapsed);
           const animations = steps.map((s) => {
             const dur = total > 0 ? Math.max(16, (s.dist / total) * t.durationMs) : remainingMs;
@@ -459,33 +409,21 @@ export default function App() {
           seq.start();
         }
       } else {
-        entry.x.setValue(p.x);
-        entry.y.setValue(p.y);
-        entry.anim = null;
+        entry.x.setValue(p.x); entry.y.setValue(p.y); entry.anim = null;
       }
     }
     for (const id of Array.from(playerAnims.keys())) {
-      if (!seen.has(id)) {
-        const e = playerAnims.get(id);
-        if (e?.anim) e.anim.stop();
-        playerAnims.delete(id);
-      }
+      if (!seen.has(id)) { const e = playerAnims.get(id); if (e?.anim) e.anim.stop(); playerAnims.delete(id); }
     }
   }, [otherPlayers]);
 
-  useEffect(() => {
-    const unsub = subscribeLetters(setLetters);
-    return () => unsub();
-  }, []);
+  useEffect(() => { const unsub = subscribeLetters(setLetters); return () => unsub(); }, []);
 
   useEffect(() => {
     (async () => {
       try {
         const raw = await AsyncStorage.getItem(INVENTORY_KEY);
-        if (raw) {
-          const data = JSON.parse(raw);
-          if (Array.isArray(data)) setInventory(data);
-        }
+        if (raw) { const data = JSON.parse(raw); if (Array.isArray(data)) setInventory(data); }
       } catch (e) {}
       setInventoryLoaded(true);
     })();
@@ -503,16 +441,13 @@ export default function App() {
 
   useEffect(() => {
     const id = setInterval(() => {
-      const vw = viewport.w || SCREEN_W;
-      const vh = viewport.h || SCREEN_H;
+      const vw = viewport.w || SCREEN_W, vh = viewport.h || SCREEN_H;
       if (!vw || !vh) return;
       const s = lastScale.current;
-      const charX = animX.__getValue();
-      const charY = animY.__getValue();
+      const charX = animX.__getValue(), charY = animY.__getValue();
       const offX = lastOffset.current.x + dx.__getValue();
       const offY = lastOffset.current.y + dy.__getValue();
-      const cx = MAP_W_PX / 2;
-      const cy = MAP_H_PX / 2;
+      const cx = MAP_W_PX / 2, cy = MAP_H_PX / 2;
       const screenX = offX + s * charX + cx * (1 - s);
       const screenY = offY + s * charY + cy * (1 - s);
       const dist = Math.hypot(screenX - vw / 2, screenY - vh / 2);
@@ -527,12 +462,10 @@ export default function App() {
       Animated.timing(bounce, { toValue: 0, duration: 150, useNativeDriver: true }).start();
       return;
     }
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(bounce, { toValue: 1, duration: 220, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-        Animated.timing(bounce, { toValue: 0, duration: 220, easing: Easing.in(Easing.quad), useNativeDriver: true }),
-      ])
-    );
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(bounce, { toValue: 1, duration: 220, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 0, duration: 220, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+    ]));
     loop.start();
     return () => loop.stop();
   }, [moving]);
@@ -552,14 +485,10 @@ export default function App() {
 
   useEffect(() => {
     if (isInitialCenter.current || !loaded || viewport.w === 0) return;
-    const s = lastScale.current;
-    const vw = viewport.w;
-    const vh = viewport.h;
-    const charX = animX.__getValue();
-    const charY = animY.__getValue();
+    const s = lastScale.current, vw = viewport.w, vh = viewport.h;
+    const charX = animX.__getValue(), charY = animY.__getValue();
     const { x: newX, y: newY } = computeCenteredOffset(charX, charY, vw, vh, s);
-    tx.setValue(newX);
-    ty.setValue(newY);
+    tx.setValue(newX); ty.setValue(newY);
     lastOffset.current = { x: newX, y: newY };
     isInitialCenter.current = true;
   }, [loaded, viewport.w, viewport.h]);
@@ -569,52 +498,33 @@ export default function App() {
     const samples = activePathRef.current;
     if (!samples || samples.length < 2) return;
     if (currentAnim.current) currentAnim.current.stop();
-    const cx = animX.__getValue();
-    const cy = animY.__getValue();
-    const sx = Math.floor(cx / TILE_PX);
-    const sy = Math.floor(cy / TILE_PX);
+    const cx = animX.__getValue(), cy = animY.__getValue();
+    const sx = Math.floor(cx / TILE_PX), sy = Math.floor(cy / TILE_PX);
     const last = samples[samples.length - 1];
-    const fx = Math.floor(last.x / TILE_PX);
-    const fy = Math.floor(last.y / TILE_PX);
-    const cellPath = findPath(TILES_DATA, MAP_W, MAP_H, sx, sy, fx, fy, sillons);
+    const cellPath = findPath(TILES_DATA, MAP_W, MAP_H, sx, sy, Math.floor(last.x / TILE_PX), Math.floor(last.y / TILE_PX), sillons);
     if (!cellPath) return;
     const { samples: newSamples, length } = buildStraightPath(cellPath, { x: cx, y: cy });
     activePathRef.current = newSamples;
     startMoveAlongCurve(newSamples, length);
   }, [speedMul]);
 
-  useEffect(() => {
-    return () => { if (speedTimer.current) clearTimeout(speedTimer.current); };
-  }, []);
+  useEffect(() => { return () => { if (speedTimer.current) clearTimeout(speedTimer.current); }; }, []);
 
-  const onPanGesture = Animated.event(
-    [{ nativeEvent: { translationX: dx, translationY: dy } }],
-    { useNativeDriver: true }
-  );
+  const onPanGesture = Animated.event([{ nativeEvent: { translationX: dx, translationY: dy } }], { useNativeDriver: true });
 
   const onPanStateChange = (e) => {
     const { state, translationX, translationY } = e.nativeEvent;
     if (state === State.ACTIVE || state === State.END || state === State.CANCELLED) {
-      const dist = Math.sqrt(translationX * translationX + translationY * translationY);
-      if (dist >= PAN_THRESHOLD_PX) markUserHasPanned();
+      if (Math.sqrt(translationX ** 2 + translationY ** 2) >= PAN_THRESHOLD_PX) markUserHasPanned();
     }
     if (state === State.END || state === State.CANCELLED) {
-      lastOffset.current = {
-        x: lastOffset.current.x + translationX,
-        y: lastOffset.current.y + translationY,
-      };
-      tx.setValue(lastOffset.current.x);
-      ty.setValue(lastOffset.current.y);
-      dx.setValue(0);
-      dy.setValue(0);
+      lastOffset.current = { x: lastOffset.current.x + translationX, y: lastOffset.current.y + translationY };
+      tx.setValue(lastOffset.current.x); ty.setValue(lastOffset.current.y);
+      dx.setValue(0); dy.setValue(0);
     }
   };
 
-  const onPinchGesture = Animated.event(
-    [{ nativeEvent: { scale: pinchScale } }],
-    { useNativeDriver: true }
-  );
-
+  const onPinchGesture = Animated.event([{ nativeEvent: { scale: pinchScale } }], { useNativeDriver: true });
   const pinchAnchor = useRef({ mapX: 0, mapY: 0, focalX: 0, focalY: 0 });
 
   const onPinchStateChange = (e) => {
@@ -622,43 +532,32 @@ export default function App() {
     if (state === State.BEGAN) {
       markUserHasPanned();
       pinchStartScale.current = lastScale.current;
-      const s = lastScale.current;
-      const cx = MAP_W_PX / 2;
-      const cy = MAP_H_PX / 2;
+      const s = lastScale.current, cx = MAP_W_PX / 2, cy = MAP_H_PX / 2;
       const focX = focalX ?? (viewport.w || SCREEN_W) / 2;
       const focY = focalY ?? (viewport.h || SCREEN_H) / 2;
       pinchAnchor.current = {
         mapX: (focX - lastOffset.current.x - cx * (1 - s)) / s,
         mapY: (focY - lastOffset.current.y - cy * (1 - s)) / s,
-        focalX: focX,
-        focalY: focY,
+        focalX: focX, focalY: focY,
       };
       if (pinchListenerId.current !== null) pinchScale.removeListener(pinchListenerId.current);
       pinchListenerId.current = pinchScale.addListener(({ value: liveGestureScale }) => {
         const liveScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, pinchStartScale.current * liveGestureScale));
-        const cx2 = MAP_W_PX / 2;
-        const cy2 = MAP_H_PX / 2;
+        const cx2 = MAP_W_PX / 2, cy2 = MAP_H_PX / 2;
         const { mapX, mapY, focalX: fX, focalY: fY } = pinchAnchor.current;
         const newTx = fX - cx2 * (1 - liveScale) - mapX * liveScale;
         const newTy = fY - cy2 * (1 - liveScale) - mapY * liveScale;
         baseScale.setValue(liveScale);
-        tx.setValue(newTx);
-        ty.setValue(newTy);
+        tx.setValue(newTx); ty.setValue(newTy);
         lastOffset.current = { x: newTx, y: newTy };
       });
     }
     if (state === State.END || state === State.CANCELLED) {
-      if (pinchListenerId.current !== null) {
-        pinchScale.removeListener(pinchListenerId.current);
-        pinchListenerId.current = null;
-      }
-      let next = pinchStartScale.current * gestureScale;
-      next = Math.max(MIN_SCALE, Math.min(MAX_SCALE, next));
+      if (pinchListenerId.current !== null) { pinchScale.removeListener(pinchListenerId.current); pinchListenerId.current = null; }
+      let next = Math.max(MIN_SCALE, Math.min(MAX_SCALE, pinchStartScale.current * gestureScale));
       lastScale.current = next;
-      pinchScale.setValue(1);
-      baseScale.setValue(next);
-      tx.setValue(lastOffset.current.x);
-      ty.setValue(lastOffset.current.y);
+      pinchScale.setValue(1); baseScale.setValue(next);
+      tx.setValue(lastOffset.current.x); ty.setValue(lastOffset.current.y);
     }
   };
 
@@ -711,29 +610,21 @@ export default function App() {
     if (tappedPlayer) { setSelectedPlayer(tappedPlayer); return; }
     if (moving) return;
     if (pendingTarget) {
-      const d = Math.hypot(pendingTarget.x - t.x, pendingTarget.y - t.y);
-      if (d > 30) setPendingTarget(null);
+      if (Math.hypot(pendingTarget.x - t.x, pendingTarget.y - t.y) > 30) setPendingTarget(null);
       return;
     }
     const nearLetter = findLetterNearPoint(t.x, t.y, 40);
     let goalX = t.x, goalY = t.y;
     if (nearLetter) { goalX = nearLetter.x; goalY = nearLetter.y; }
-    const sx = Math.floor(pos.x / TILE_PX);
-    const sy = Math.floor(pos.y / TILE_PX);
-    const tx2 = Math.floor(goalX / TILE_PX);
-    const ty2 = Math.floor(goalY / TILE_PX);
-    // Pathfinding avec sillons pour favoriser les chemins battus
+    const sx = Math.floor(pos.x / TILE_PX), sy = Math.floor(pos.y / TILE_PX);
+    const tx2 = Math.floor(goalX / TILE_PX), ty2 = Math.floor(goalY / TILE_PX);
     const cellPath = findPath(TILES_DATA, MAP_W, MAP_H, sx, sy, tx2, ty2, sillons);
     if (!cellPath) return;
     const { samples, length } = buildStraightPath(cellPath, pos);
     const finalPx = samples[samples.length - 1];
     const pickupLetter = nearLetter || findLetterNearPoint(finalPx.x, finalPx.y);
     const nearPlayer = pickupLetter ? null : findPlayerNearPoint(finalPx.x, finalPx.y);
-    setPendingTarget({
-      ...finalPx, samples, length,
-      pickupLetter: pickupLetter || null,
-      nearPlayer: nearPlayer || null,
-    });
+    setPendingTarget({ ...finalPx, samples, length, pickupLetter: pickupLetter || null, nearPlayer: nearPlayer || null });
   };
 
   const openLetterWrite = () => { setLetterDraft(''); setLetterWriteOpen(true); };
@@ -741,13 +632,9 @@ export default function App() {
   const sendLetter = async () => {
     const text = (letterDraft || '').trim();
     if (!text || !profile) return;
-    setLetterWriteOpen(false);
-    setLetterDraft('');
+    setLetterWriteOpen(false); setLetterDraft('');
     try {
-      await dropLetter({
-        authorId: profile.id, authorName: profile.name, authorColor: profile.color,
-        x: pos.x, y: pos.y, text,
-      });
+      await dropLetter({ authorId: profile.id, authorName: profile.name, authorColor: profile.color, x: pos.x, y: pos.y, text });
     } catch (e) { console.warn('drop letter failed', e); }
   };
 
@@ -761,15 +648,13 @@ export default function App() {
 
   const confirmMove = () => {
     if (!pendingTarget) return;
-    const samples = pendingTarget.samples;
-    const length = pendingTarget.length;
-    activePathRef.current = samples;
-    setFrozenActivePath(samples);
+    activePathRef.current = pendingTarget.samples;
+    setFrozenActivePath(pendingTarget.samples);
     pendingPickupRef.current = pendingTarget.pickupLetter || null;
     setPendingTarget(null);
     setTarget({ x: pendingTarget.x, y: pendingTarget.y });
-    onTripStart(); // pause erosion sillons
-    startMoveAlongCurve(samples, length);
+    onTripStart();
+    startMoveAlongCurve(pendingTarget.samples, pendingTarget.length);
   };
 
   const cancelMove = () => setPendingTarget(null);
@@ -782,9 +667,7 @@ export default function App() {
     }
     cancelArrivalNotification();
     pendingPickupRef.current = null;
-    const cx = animX.__getValue();
-    const cy = animY.__getValue();
-    finalizeArrival({ x: cx, y: cy });
+    finalizeArrival({ x: animX.__getValue(), y: animY.__getValue() });
   };
 
   const progressRef = useRef(null);
@@ -794,8 +677,7 @@ export default function App() {
     setTripSummary({
       distancePx: Math.max(0, Math.round(distancePx || 0)),
       durationMs: Math.max(0, Math.round(durationMs || 0)),
-      pickedUpItems,
-      startDistancePx,
+      pickedUpItems, startDistancePx,
     });
   };
 
@@ -803,12 +685,8 @@ export default function App() {
 
   const startMoveAlongCurve = (samples, length) => {
     if (!samples || samples.length < 2) return;
-    // Vitesse modulee par les sillons sur ce chemin
     const sillonMul = avgSillonSpeedMul(samples, sillons, TILES_DATA, MAP_W);
-    const baseDuration = Math.max(
-      MIN_DURATION_MS,
-      Math.min(MAX_DURATION_MS, (length / (SPEED_PX_PER_SEC * sillonMul)) * 1000)
-    );
+    const baseDuration = Math.max(MIN_DURATION_MS, Math.min(MAX_DURATION_MS, (length / (SPEED_PX_PER_SEC * sillonMul)) * 1000));
     const dur = baseDuration / speedMul;
     moveTarget.current = samples[samples.length - 1];
     moveBaseDuration.current = baseDuration;
@@ -820,30 +698,19 @@ export default function App() {
     setEta(etaMs);
     setConsumedDist(0);
     lastConsumedTick.current = 0;
-    announceMove({
-      from: { x: pos.x, y: pos.y },
-      to: samples[samples.length - 1],
-      startTs: Date.now(),
-      durationMs: dur,
-    });
-    const last = samples[samples.length - 1];
-    const destLabel = `${Math.round(last.x / TILE_PX)}, ${Math.round(last.y / TILE_PX)}`;
-    scheduleArrivalNotification(etaMs, destLabel);
+    announceMove({ from: { x: pos.x, y: pos.y }, to: samples[samples.length - 1], startTs: Date.now(), durationMs: dur });
+    scheduleArrivalNotification(etaMs, `${Math.round(samples[samples.length-1].x/TILE_PX)}, ${Math.round(samples[samples.length-1].y/TILE_PX)}`);
     const progress = new Animated.Value(0);
     progressRef.current = progress;
-    const DOT_TICK = 26;
     progressListenerId.current = progress.addListener(({ value }) => {
       const p = sampleAt(samples, value);
-      animX.setValue(p.x);
-      animY.setValue(p.y);
-      if (value - lastConsumedTick.current >= DOT_TICK) {
+      animX.setValue(p.x); animY.setValue(p.y);
+      if (value - lastConsumedTick.current >= 26) {
         lastConsumedTick.current = value;
         setConsumedDist(value);
       }
     });
-    const anim = Animated.timing(progress, {
-      toValue: length, duration: dur, easing: Easing.linear, useNativeDriver: false,
-    });
+    const anim = Animated.timing(progress, { toValue: length, duration: dur, easing: Easing.linear, useNativeDriver: false });
     currentAnim.current = anim;
     anim.start(({ finished }) => {
       if (progressListenerId.current && progressRef.current) {
@@ -858,65 +725,41 @@ export default function App() {
   const finalizeArrival = (final) => {
     const tripDistancePx = tripTotalLengthRef.current || 0;
     const tripDurationMs = tripStartedAtRef.current ? Date.now() - tripStartedAtRef.current : 0;
-
-    animX.setValue(final.x);
-    animY.setValue(final.y);
+    animX.setValue(final.x); animY.setValue(final.y);
     setPos({ x: final.x, y: final.y });
     clearMyMove(final.x, final.y);
-    setMoving(false);
-    setEta(null);
-    setTarget(null);
+    setMoving(false); setEta(null); setTarget(null);
+    const pathSnap = activePathRef.current;
     activePathRef.current = null;
     setFrozenActivePath(null);
-    setConsumedDist(0);
-    lastConsumedTick.current = 0;
-    currentAnim.current = null;
-    moveTarget.current = null;
-    tripStartedAtRef.current = null;
-    tripTotalLengthRef.current = 0;
+    setConsumedDist(0); lastConsumedTick.current = 0;
+    currentAnim.current = null; moveTarget.current = null;
+    tripStartedAtRef.current = null; tripTotalLengthRef.current = 0;
 
-    // Incrementer les sillons sur le chemin parcouru
-    if (frozenActivePath && frozenActivePath.length > 0) {
-      const cellPath = frozenActivePath.map((p) => ({
-        x: Math.floor(p.x / TILE_PX),
-        y: Math.floor(p.y / TILE_PX),
-      }));
+    if (pathSnap && pathSnap.length > 0) {
+      const cellPath = pathSnap.map((p) => ({ x: Math.floor(p.x / TILE_PX), y: Math.floor(p.y / TILE_PX) }));
       onTripEnd(cellPath);
     }
 
     const pickup = pendingPickupRef.current;
     pendingPickupRef.current = null;
-
     const pickedUpItems = [];
-
-    if (pickup && pickup.id) {
+    if (pickup?.id) {
       const stillThere = letters.some((l) => l.id === pickup.id);
       if (stillThere) {
-        const newItem = {
-          id: pickup.id, authorId: pickup.authorId,
-          authorName: pickup.authorName, authorColor: pickup.authorColor,
-          text: pickup.text, pickedAt: Date.now(), unread: true,
-        };
-        setInventory((prev) => {
-          if (prev.some((l) => l.id === pickup.id)) return prev;
-          return [...prev, newItem];
-        });
+        const newItem = { id: pickup.id, authorId: pickup.authorId, authorName: pickup.authorName, authorColor: pickup.authorColor, text: pickup.text, pickedAt: Date.now(), unread: true };
+        setInventory((prev) => prev.some((l) => l.id === pickup.id) ? prev : [...prev, newItem]);
         consumeLetter(pickup.id).catch(() => {});
         pickedUpItems.push(newItem);
       }
     }
-
     if (tripDistancePx > 0) {
       setTotalDistancePx((prev) => {
         const newTotal = prev + tripDistancePx;
         AsyncStorage.setItem(TOTAL_DISTANCE_KEY, newTotal.toString()).catch(() => {});
-        const profileUpdate = updateMyProfile({ totalDistancePx: newTotal });
-        if (profileUpdate && typeof profileUpdate.catch === 'function') {
-          profileUpdate.catch(() => {});
-        }
-        if (tripDistancePx > 0 || tripDurationMs > 0) {
-          showTripSummary(tripDistancePx, tripDurationMs, pickedUpItems, prev);
-        }
+        const pu = updateMyProfile({ totalDistancePx: newTotal });
+        if (pu && typeof pu.catch === 'function') pu.catch(() => {});
+        if (tripDistancePx > 0 || tripDurationMs > 0) showTripSummary(tripDistancePx, tripDurationMs, pickedUpItems, prev);
         return newTotal;
       });
     } else if (tripDurationMs > 0) {
@@ -926,8 +769,7 @@ export default function App() {
 
   const startMove = (t) => {
     const { baseDurationMs } = movementDuration(pos, t, 1);
-    moveTarget.current = t;
-    moveBaseDuration.current = baseDurationMs;
+    moveTarget.current = t; moveBaseDuration.current = baseDurationMs;
     setMoving(true);
     const dur = baseDurationMs / speedMul;
     announceMove({ from: { x: pos.x, y: pos.y }, to: t, startTs: Date.now(), durationMs: dur });
@@ -945,84 +787,57 @@ export default function App() {
     currentAnim.current = anim;
     anim.start(({ finished }) => {
       if (finished) {
-        setPos(t);
-        clearMyMove(t.x, t.y);
-        setMoving(false);
-        setEta(null);
-        setTarget(null);
-        currentAnim.current = null;
-        moveTarget.current = null;
+        setPos(t); clearMyMove(t.x, t.y);
+        setMoving(false); setEta(null); setTarget(null);
+        currentAnim.current = null; moveTarget.current = null;
       }
     });
   };
 
   const recenter = () => {
-    const vw = viewport.w || SCREEN_W;
-    const vh = viewport.h || SCREEN_H;
-    const s = lastScale.current;
-    const charX = animX.__getValue();
-    const charY = animY.__getValue();
+    const vw = viewport.w || SCREEN_W, vh = viewport.h || SCREEN_H, s = lastScale.current;
+    const charX = animX.__getValue(), charY = animY.__getValue();
     const curOffX = lastOffset.current.x + dx.__getValue();
     const curOffY = lastOffset.current.y + dy.__getValue();
     const { x: targetX, y: targetY } = computeCenteredOffset(charX, charY, vw, vh, s);
     lastOffset.current = { x: curOffX, y: curOffY };
-    dx.setValue(0);
-    dy.setValue(0);
-    tx.setValue(curOffX);
-    ty.setValue(curOffY);
+    dx.setValue(0); dy.setValue(0);
+    tx.setValue(curOffX); ty.setValue(curOffY);
     Animated.parallel([
       Animated.timing(tx, { toValue: targetX, duration: 350, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
       Animated.timing(ty, { toValue: targetY, duration: 350, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-    ]).start(() => {
-      lastOffset.current = { x: targetX, y: targetY };
-      userHasPanned.current = false;
-      if (moving) startFollowLoop();
-    });
+    ]).start(() => { lastOffset.current = { x: targetX, y: targetY }; userHasPanned.current = false; if (moving) startFollowLoop(); });
   };
 
   const centerOnPoint = (mapX, mapY) => {
-    const vw = viewport.w || SCREEN_W;
-    const vh = viewport.h || SCREEN_H;
-    const s = lastScale.current;
-    const cx = MAP_W_PX / 2;
-    const cy = MAP_H_PX / 2;
+    const vw = viewport.w || SCREEN_W, vh = viewport.h || SCREEN_H, s = lastScale.current;
+    const cx = MAP_W_PX / 2, cy = MAP_H_PX / 2;
     const targetX = vw / 2 - s * mapX - cx * (1 - s);
     const targetY = vh / 2 - s * mapY - cy * (1 - s);
     const curOffX = lastOffset.current.x + dx.__getValue();
     const curOffY = lastOffset.current.y + dy.__getValue();
     lastOffset.current = { x: curOffX, y: curOffY };
-    dx.setValue(0);
-    dy.setValue(0);
-    tx.setValue(curOffX);
-    ty.setValue(curOffY);
+    dx.setValue(0); dy.setValue(0); tx.setValue(curOffX); ty.setValue(curOffY);
     userHasPanned.current = true;
     Animated.parallel([
       Animated.timing(tx, { toValue: targetX, duration: 450, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
       Animated.timing(ty, { toValue: targetY, duration: 450, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-    ]).start(() => {
-      lastOffset.current = { x: targetX, y: targetY };
-    });
+    ]).start(() => { lastOffset.current = { x: targetX, y: targetY }; });
   };
 
   const findRandomWalkableTileNearPlayer = () => {
-    const originTx = Math.floor(pos.x / TILE_PX);
-    const originTy = Math.floor(pos.y / TILE_PX);
-    const MIN_R = 5;
-    const MAX_R = 15;
+    const originTx = Math.floor(pos.x / TILE_PX), originTy = Math.floor(pos.y / TILE_PX);
     const candidates = [];
-    for (let dy2 = -MAX_R; dy2 <= MAX_R; dy2++) {
-      for (let dx2 = -MAX_R; dx2 <= MAX_R; dx2++) {
+    for (let dy2 = -15; dy2 <= 15; dy2++) {
+      for (let dx2 = -15; dx2 <= 15; dx2++) {
         const dist = Math.max(Math.abs(dx2), Math.abs(dy2));
-        if (dist < MIN_R || dist > MAX_R) continue;
-        const nx = originTx + dx2;
-        const ny = originTy + dy2;
+        if (dist < 5 || dist > 15) continue;
+        const nx = originTx + dx2, ny = originTy + dy2;
         if (nx < 0 || nx >= MAP_W || ny < 0 || ny >= MAP_H) continue;
-        if (WALKABLE[TILES_DATA[ny * MAP_W + nx]]) {
-          candidates.push({ x: nx * TILE_PX + TILE_PX / 2, y: ny * TILE_PX + TILE_PX / 2 });
-        }
+        if (WALKABLE[TILES_DATA[ny * MAP_W + nx]]) candidates.push({ x: nx * TILE_PX + TILE_PX / 2, y: ny * TILE_PX + TILE_PX / 2 });
       }
     }
-    if (candidates.length === 0) return null;
+    if (!candidates.length) return null;
     return candidates[Math.floor(Math.random() * candidates.length)];
   };
 
@@ -1031,47 +846,35 @@ export default function App() {
     const dropPos = findRandomWalkableTileNearPlayer();
     if (!dropPos) return;
     const msgIndex = Math.floor(Math.random() * DEBUG_MESSAGES.length);
-    const text = DEBUG_MESSAGES[msgIndex];
-    const authorIndex = msgIndex % DEBUG_MESSAGE_AUTHORS.length;
-    const author = DEBUG_MESSAGE_AUTHORS[authorIndex];
+    const author = DEBUG_MESSAGE_AUTHORS[msgIndex % DEBUG_MESSAGE_AUTHORS.length];
     setSettingsOpen(false);
     try {
-      await dropLetter({
-        authorId: `debug_${author.name.toLowerCase()}`,
-        authorName: author.name,
-        authorColor: author.color,
-        x: dropPos.x,
-        y: dropPos.y,
-        text,
-      });
+      await dropLetter({ authorId: `debug_${author.name.toLowerCase()}`, authorName: author.name, authorColor: author.color, x: dropPos.x, y: dropPos.y, text: DEBUG_MESSAGES[msgIndex] });
       centerOnPoint(dropPos.x, dropPos.y);
-    } catch (e) {
-      console.warn('debug drop letter failed', e);
-    }
+    } catch (e) { console.warn('debug drop letter failed', e); }
   };
 
-  const handleDebugBoostSillons = () => {
+  const handleDebugBoostSillons = useCallback(() => {
+    debugBoost(Math.floor(pos.x / TILE_PX), Math.floor(pos.y / TILE_PX), 5, 50);
+    setSettingsOpen(false);
+  }, [pos.x, pos.y, debugBoost]);
+
+  // Super Sillon : +50 sur la tile courante, érosion complète dans 5min
+  const handleDebugSuperSillon = useCallback(() => {
     const cx = Math.floor(pos.x / TILE_PX);
     const cy = Math.floor(pos.y / TILE_PX);
-    debugBoost(cx, cy, 5, 80);
+    debugBoost(cx, cy, 0, 50); // rayon 0 = tile seule
+    setTimeout(() => debugFastErosion(5 / 1440), 5 * 60 * 1000);
     setSettingsOpen(false);
-  };
+  }, [pos.x, pos.y, debugBoost, debugFastErosion]);
 
   const onSpeedPressIn = () => {
     setSpeedLvl(1);
     let lvl = 1;
-    const tick = () => {
-      lvl++;
-      if (lvl >= SPEED_LEVELS.length) return;
-      setSpeedLvl(lvl);
-      speedTimer.current = setTimeout(tick, 600);
-    };
+    const tick = () => { lvl++; if (lvl >= SPEED_LEVELS.length) return; setSpeedLvl(lvl); speedTimer.current = setTimeout(tick, 600); };
     speedTimer.current = setTimeout(tick, 600);
   };
-  const onSpeedPressOut = () => {
-    if (speedTimer.current) clearTimeout(speedTimer.current);
-    setSpeedLvl(0);
-  };
+  const onSpeedPressOut = () => { if (speedTimer.current) clearTimeout(speedTimer.current); setSpeedLvl(0); };
 
   const openSettings = () => { setDraftName(profile?.name || ''); setSettingsOpen(true); };
 
@@ -1087,73 +890,44 @@ export default function App() {
     if (trimmed && trimmed !== profile?.name) saveProfile({ name: trimmed });
   };
 
-  const onToggleDebug = () => {
-    const next = !debugEnabled;
-    setDebugEnabled(next);
-    saveProfile({ debug: next });
-  };
+  const onToggleDebug = () => { const next = !debugEnabled; setDebugEnabled(next); saveProfile({ debug: next }); };
 
   const previewStats = pendingTarget ? (() => {
     const length = pendingTarget.length || 0;
     const sillonMul = avgSillonSpeedMul(pendingTarget.samples, sillons, TILES_DATA, MAP_W);
-    const durMs = Math.max(
-      MIN_DURATION_MS,
-      Math.min(MAX_DURATION_MS, (length / (SPEED_PX_PER_SEC * sillonMul)) * 1000)
-    ) / Math.max(1, speedMul);
+    const durMs = Math.max(MIN_DURATION_MS, Math.min(MAX_DURATION_MS, (length / (SPEED_PX_PER_SEC * sillonMul)) * 1000)) / Math.max(1, speedMul);
     return { dist: Math.round(length), durSec: Math.round(durMs / 1000) };
   })() : null;
 
-  // --- Modale liste des joueurs ---
   const renderPlayersListModal = () => (
-    <Modal
-      visible={playersListOpen}
-      transparent
-      animationType="fade"
-      onRequestClose={() => setPlayersListOpen(false)}
-    >
+    <Modal visible={playersListOpen} transparent animationType="fade" onRequestClose={() => setPlayersListOpen(false)}>
       <TouchableWithoutFeedback onPress={() => setPlayersListOpen(false)}>
         <View style={styles.playersModalOverlay}>
           <TouchableWithoutFeedback onPress={() => {}}>
             <View style={styles.playersModalCard}>
               <Text style={styles.playersModalTitle}>
-                {`\uD83D\uDC65`} Joueurs en ligne ({otherPlayers.filter(isOnline).length})
+                👥 Joueurs en ligne ({otherPlayers.filter(isOnline).length})
               </Text>
               {otherPlayers.length === 0 ? (
                 <Text style={styles.playersModalEmpty}>Aucun autre joueur connecté</Text>
               ) : (
                 <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
                   {otherPlayers.map((p) => {
-                    const online = isOnline(p);
-                    const followed = followedPlayers.has(p.id);
+                    const online = isOnline(p), followed = followedPlayers.has(p.id);
                     return (
                       <View key={p.id} style={styles.playerRow}>
                         <View style={[styles.playerRowDot, { backgroundColor: p.color || '#888' }]} />
-                        <Text style={[styles.playerRowName, !online && styles.playerRowNameOffline]}>
-                          {p.name || 'Anonyme'}
-                        </Text>
-                        {!online && <Text style={styles.playerRowStatus}>{`\uD83D\uDCA4`}</Text>}
-                        <TouchableOpacity
-                          style={[styles.heartBtn, followed && styles.heartBtnActive]}
-                          onPress={() => toggleFollow(p.id)}
-                          activeOpacity={0.7}
-                        >
-                          <Heart
-                            size={18}
-                            color={followed ? '#ff4d6d' : THEME.text}
-                            fill={followed ? '#ff4d6d' : 'none'}
-                            strokeWidth={2}
-                          />
+                        <Text style={[styles.playerRowName, !online && styles.playerRowNameOffline]}>{p.name || 'Anonyme'}</Text>
+                        {!online && <Text style={styles.playerRowStatus}>💤</Text>}
+                        <TouchableOpacity style={[styles.heartBtn, followed && styles.heartBtnActive]} onPress={() => toggleFollow(p.id)} activeOpacity={0.7}>
+                          <Heart size={18} color={followed ? '#ff4d6d' : THEME.text} fill={followed ? '#ff4d6d' : 'none'} strokeWidth={2} />
                         </TouchableOpacity>
                       </View>
                     );
                   })}
                 </ScrollView>
               )}
-              <TouchableOpacity
-                style={styles.playersModalCloseBtn}
-                onPress={() => setPlayersListOpen(false)}
-                activeOpacity={0.8}
-              >
+              <TouchableOpacity style={styles.playersModalCloseBtn} onPress={() => setPlayersListOpen(false)} activeOpacity={0.8}>
                 <Text style={styles.playersModalCloseBtnText}>Fermer</Text>
               </TouchableOpacity>
             </View>
@@ -1171,21 +945,13 @@ export default function App() {
           <Animated.View style={{ flex: 1 }}>
             <PanGestureHandler onGestureEvent={onPanGesture} onHandlerStateChange={onPanStateChange} minPointers={1} maxPointers={1}>
               <Animated.View style={styles.canvas} onLayout={onCanvasLayout}>
-                <Animated.View style={[styles.map, {
-                  width: MAP_W_PX, height: MAP_H_PX,
-                  transform: [{ translateX: totalX }, { translateY: totalY }, { scale: baseScale }],
-                }]}>
+                <Animated.View style={[styles.map, { width: MAP_W_PX, height: MAP_H_PX, transform: [{ translateX: totalX }, { translateY: totalY }, { scale: baseScale }] }]}>
                   <TouchableWithoutFeedback onPress={handleTap}>
                     <View style={StyleSheet.absoluteFill}>
                       <TileLayer />
-                      {/* Sillons visuels — chemins battus */}
                       {showPathLayer && <PathLayer sillons={sillons} />}
-                      {pendingTarget && (
-                        <DottedTrail samples={pendingTarget.samples} color="#3a7ea8" spacing={26} size={6} opacity={0.95} />
-                      )}
-                      {frozenActivePath && (
-                        <DottedTrail samples={frozenActivePath} color="#3a7ea8" spacing={30} size={5} opacity={0.55} minDist={consumedDist + 40} />
-                      )}
+                      {pendingTarget && <DottedTrail samples={pendingTarget.samples} color="#3a7ea8" spacing={26} size={6} opacity={0.95} />}
+                      {frozenActivePath && <DottedTrail samples={frozenActivePath} color="#3a7ea8" spacing={30} size={5} opacity={0.55} minDist={consumedDist + 40} />}
                       {letters.map((l) => {
                         const isMine = profile && l.authorId === profile.id;
                         const distToMe = Math.hypot(l.x - pos.x, l.y - pos.y);
@@ -1193,22 +959,12 @@ export default function App() {
                         const iconColor = isMine ? '#666' : (readable ? (l.authorColor || '#8b4513') : '#888');
                         return (
                           <View key={l.id} pointerEvents="none" style={{ position: 'absolute', left: l.x - 16, top: l.y - 16 }}>
-                            {readable && (
-                              <View style={{
-                                position: 'absolute', left: -6, top: -6,
-                                width: 44, height: 44, borderRadius: 22,
-                                backgroundColor: l.authorColor || '#ffd93d', opacity: 0.25,
-                              }} />
-                            )}
+                            {readable && <View style={{ position: 'absolute', left: -6, top: -6, width: 44, height: 44, borderRadius: 22, backgroundColor: l.authorColor || '#ffd93d', opacity: 0.25 }} />}
                             <ScrollText size={32} color={iconColor} strokeWidth={2.2} />
                           </View>
                         );
                       })}
-                      {target && (
-                        <View style={[styles.targetMarker, { left: target.x - 14, top: target.y - 14 }]}>
-                          <View style={styles.targetInner} />
-                        </View>
-                      )}
+                      {target && <View style={[styles.targetMarker, { left: target.x - 14, top: target.y - 14 }]}><View style={styles.targetInner} /></View>}
                       {pendingTarget && (
                         <>
                           <View style={[styles.previewTargetOuter, { left: pendingTarget.x - 18, top: pendingTarget.y - 18 }]} />
@@ -1218,51 +974,28 @@ export default function App() {
                       {otherPlayers.map((p) => {
                         const e = playerAnims.get(p.id);
                         if (!e) return null;
-                        const isMoving = !!p.target;
-                        const online = isOnline(p);
+                        const isMoving = !!p.target, online = isOnline(p);
                         return (
                           <View key={p.id} style={StyleSheet.absoluteFill} pointerEvents="none">
-                            <Animated.View style={{
-                              position: 'absolute', width: 50, height: 50,
-                              transform: [
-                                { translateX: Animated.subtract(e.x, 25) },
-                                { translateY: Animated.subtract(e.y, 25) },
-                                ...(isMoving ? [
-                                  { translateY: Animated.multiply(bounce, -6) },
-                                  { scaleX: bounce.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) },
-                                  { scaleY: bounce.interpolate({ inputRange: [0, 1], outputRange: [1, 0.94] }) },
-                                ] : []),
-                                ...(!online && !isMoving ? [
-                                  { scaleX: breathe.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1.04] }) },
-                                  { scaleY: breathe.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1.04] }) },
-                                ] : []),
-                              ],
-                            }}>
-                              <AdventurerSprite size={50} viewBoxScale={1.2} dir="down" moving={isMoving}
-                                outfit={p.outfit||'gray'} skin={p.skin||'light'} hair={p.hair||'brown'} hat={p.hat||'none'} />
+                            <Animated.View style={{ position: 'absolute', width: 50, height: 50, transform: [
+                              { translateX: Animated.subtract(e.x, 25) }, { translateY: Animated.subtract(e.y, 25) },
+                              ...(isMoving ? [{ translateY: Animated.multiply(bounce, -6) }, { scaleX: bounce.interpolate({ inputRange: [0,1], outputRange: [1,1.08] }) }, { scaleY: bounce.interpolate({ inputRange: [0,1], outputRange: [1,0.94] }) }] : []),
+                              ...(!online && !isMoving ? [{ scaleX: breathe.interpolate({ inputRange: [0,1], outputRange: [0.96,1.04] }) }, { scaleY: breathe.interpolate({ inputRange: [0,1], outputRange: [0.96,1.04] }) }] : []),
+                            ]}}>
+                              <AdventurerSprite size={50} viewBoxScale={1.2} dir="down" moving={isMoving} outfit={p.outfit||'gray'} skin={p.skin||'light'} hair={p.hair||'brown'} hat={p.hat||'none'} />
                             </Animated.View>
                             {!online && <SleepyZzz x={e.x} y={e.y} />}
-                            <Animated.Text numberOfLines={2} style={[styles.otherPlayerLabel, {
-                              transform: [
-                                { translateX: Animated.subtract(e.x, 60) },
-                                { translateY: Animated.add(e.y, 22) },
-                              ],
-                            }]}>{p.name}</Animated.Text>
+                            <Animated.Text numberOfLines={2} style={[styles.otherPlayerLabel, { transform: [{ translateX: Animated.subtract(e.x, 60) }, { translateY: Animated.add(e.y, 22) }] }]}>{p.name}</Animated.Text>
                           </View>
                         );
                       })}
-                      <Animated.View style={{
-                        position: 'absolute', width: 50, height: 50,
-                        transform: [
-                          { translateX: Animated.subtract(animX, 25) },
-                          { translateY: Animated.subtract(Animated.subtract(animY, 25), Animated.multiply(bounce, 6)) },
-                          { scaleX: bounce.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) },
-                          { scaleY: bounce.interpolate({ inputRange: [0, 1], outputRange: [1, 0.94] }) },
-                        ],
-                      }}>
-                        <AdventurerSprite size={50} viewBoxScale={1.2} dir="down" moving={moving}
-                          outfit={profile?.outfit||'red'} skin={profile?.skin||'light'}
-                          hair={profile?.hair||'brown'} hat={profile?.hat||'none'} />
+                      <Animated.View style={{ position: 'absolute', width: 50, height: 50, transform: [
+                        { translateX: Animated.subtract(animX, 25) },
+                        { translateY: Animated.subtract(Animated.subtract(animY, 25), Animated.multiply(bounce, 6)) },
+                        { scaleX: bounce.interpolate({ inputRange: [0,1], outputRange: [1,1.08] }) },
+                        { scaleY: bounce.interpolate({ inputRange: [0,1], outputRange: [1,0.94] }) },
+                      ]}}>
+                        <AdventurerSprite size={50} viewBoxScale={1.2} dir="down" moving={moving} outfit={profile?.outfit||'red'} skin={profile?.skin||'light'} hair={profile?.hair||'brown'} hat={profile?.hat||'none'} />
                       </Animated.View>
                     </View>
                   </TouchableWithoutFeedback>
@@ -1274,33 +1007,17 @@ export default function App() {
 
         {moving && <TravelingBar eta={eta} onStop={stopMove} />}
 
-        {/* Modale fin de trajet */}
-        <Modal
-          visible={!!tripSummary}
-          transparent
-          animationType="fade"
-          onRequestClose={dismissTripSummary}
-        >
+        <Modal visible={!!tripSummary} transparent animationType="fade" onRequestClose={dismissTripSummary}>
           <View style={styles.tripSummaryOverlay}>
             <View style={styles.tripSummaryModal}>
-              <Text style={styles.tripSummaryTitle}>{`\uD83C\uDFC1`} Trajet terminé</Text>
-              <Text style={styles.tripSummaryText}>
-                {tripSummary ? `${formatMeters(tripSummary.distancePx)} · ${formatDuration(Math.round(tripSummary.durationMs / 1000))}` : ''}
-              </Text>
-              {tripSummary && (
-                <XPBar
-                  totalDistancePx={tripSummary.startDistancePx + tripSummary.distancePx}
-                  startDistancePx={tripSummary.startDistancePx}
-                  animated
-                />
-              )}
+              <Text style={styles.tripSummaryTitle}>🏁 Trajet terminé</Text>
+              <Text style={styles.tripSummaryText}>{tripSummary ? `${formatMeters(tripSummary.distancePx)} · ${formatDuration(Math.round(tripSummary.durationMs / 1000))}` : ''}</Text>
+              {tripSummary && <XPBar totalDistancePx={tripSummary.startDistancePx + tripSummary.distancePx} startDistancePx={tripSummary.startDistancePx} animated />}
               {tripSummary?.pickedUpItems?.length > 0 && (
                 <View style={styles.tripSummaryPickups}>
                   <Text style={styles.tripSummaryPickupsTitle}>Vous avez trouvé :</Text>
                   {tripSummary.pickedUpItems.map((item) => (
-                    <Text key={item.id} style={styles.tripSummaryPickupLine}>
-                      {'- nouveau message de '}{item.authorName || 'Anonyme'}
-                    </Text>
+                    <Text key={item.id} style={styles.tripSummaryPickupLine}>{'- nouveau message de '}{item.authorName || 'Anonyme'}</Text>
                   ))}
                 </View>
               )}
@@ -1311,7 +1028,6 @@ export default function App() {
           </View>
         </Modal>
 
-        {/* Modale liste des joueurs */}
         {renderPlayersListModal()}
 
         {showRecenterBtn && (
@@ -1321,60 +1037,36 @@ export default function App() {
         )}
 
         {debugEnabled && (
-          <TouchableOpacity
-            style={[styles.speedBtn, speedMul > 1 && styles.speedBtnActive]}
-            onPressIn={onSpeedPressIn} onPressOut={onSpeedPressOut} activeOpacity={0.8}
-          >
-            <Text style={styles.speedText}>{`\u23E9`} {speedMul}{`\xD7`}</Text>
+          <TouchableOpacity style={[styles.speedBtn, speedMul > 1 && styles.speedBtnActive]} onPressIn={onSpeedPressIn} onPressOut={onSpeedPressOut} activeOpacity={0.8}>
+            <Text style={styles.speedText}>⏩ {speedMul}×</Text>
           </TouchableOpacity>
         )}
 
-        {/* Flèches uniquement pour les joueurs suivis */}
-        {viewport.w > 0 && otherPlayers
-          .filter((p) => followedPlayers.has(p.id))
-          .map((p) => {
-            const e = playerAnims.get(p.id);
-            if (!e) return null;
-            return (
-              <SmoothEdgeArrow key={`arr-${p.id}`} color={p.color}
-                playerX={e.x} playerY={e.y} camX={totalX} camY={totalY}
-                scaleVal={baseScale} W={viewport.w} H={viewport.h} />
-            );
-          })
-        }
+        {viewport.w > 0 && otherPlayers.filter((p) => followedPlayers.has(p.id)).map((p) => {
+          const e = playerAnims.get(p.id);
+          if (!e) return null;
+          return <SmoothEdgeArrow key={`arr-${p.id}`} color={p.color} playerX={e.x} playerY={e.y} camX={totalX} camY={totalY} scaleVal={baseScale} W={viewport.w} H={viewport.h} />;
+        })}
 
-        {/* Badge en ligne */}
         {profile && (
-          <TouchableOpacity
-            style={styles.onlineBadge}
-            onPress={() => setPlayersListOpen(true)}
-            activeOpacity={0.8}
-          >
+          <TouchableOpacity style={styles.onlineBadge} onPress={() => setPlayersListOpen(true)} activeOpacity={0.8}>
             <View style={[styles.onlineDot, { backgroundColor: profile.color }]} />
-            <Text style={styles.onlineText}>
-              {profile.name} · {otherPlayers.filter(isOnline).length} en ligne
-            </Text>
+            <Text style={styles.onlineText}>{profile.name} · {otherPlayers.filter(isOnline).length} en ligne</Text>
           </TouchableOpacity>
         )}
 
         <TouchableOpacity style={styles.inventoryBtn} onPress={() => setInventoryOpen(true)} activeOpacity={0.8}>
           <Backpack size={22} color={THEME.text} strokeWidth={2.2} />
-          {unreadCount > 0 && (
-            <View style={styles.inventoryBadge}>
-              <Text style={styles.inventoryBadgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
-            </View>
-          )}
+          {unreadCount > 0 && <View style={styles.inventoryBadge}><Text style={styles.inventoryBadgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text></View>}
         </TouchableOpacity>
 
         {pendingTarget && previewStats && (
           <ConfirmationBar
             distancePx={previewStats.dist} durationSec={previewStats.durSec}
             destLabel={
-              pendingTarget.pickupLetter
-                ? `Message de ${pendingTarget.pickupLetter.authorName || 'Anonyme'}`
-                : pendingTarget.nearPlayer
-                  ? (pendingTarget.nearPlayer.name || 'Inconnu')
-                  : `${Math.round(pendingTarget.x / TILE_PX)}, ${Math.round(pendingTarget.y / TILE_PX)}`
+              pendingTarget.pickupLetter ? `Message de ${pendingTarget.pickupLetter.authorName || 'Anonyme'}`
+              : pendingTarget.nearPlayer ? (pendingTarget.nearPlayer.name || 'Inconnu')
+              : `${Math.round(pendingTarget.x / TILE_PX)}, ${Math.round(pendingTarget.y / TILE_PX)}`
             }
             onCancel={cancelMove} onConfirm={confirmMove}
           />
@@ -1391,11 +1083,16 @@ export default function App() {
         )}
 
         {settingsOpen && (
-          <SettingsModal profile={profile} draftName={draftName} setDraftName={setDraftName}
+          <SettingsModal
+            profile={profile} draftName={draftName} setDraftName={setDraftName}
             onPatch={saveProfile} debugEnabled={debugEnabled} onToggleDebug={onToggleDebug}
             onClose={() => setSettingsOpen(false)} onValidateName={validateName}
             onDebugGenerateMessage={handleDebugGenerateMessage}
+            onDebugSpeedPressIn={onSpeedPressIn}
+            onDebugSpeedPressOut={onSpeedPressOut}
+            debugSpeedMul={speedMul}
             onDebugBoostSillons={handleDebugBoostSillons}
+            onDebugSuperSillon={handleDebugSuperSillon}
             onDebugFastErosion={() => { debugFastErosion(7); setSettingsOpen(false); }}
             onDebugResetSillons={() => { debugReset(); setSettingsOpen(false); }}
             sillonsStats={debugEnabled ? debugStats() : null}
@@ -1404,10 +1101,7 @@ export default function App() {
           />
         )}
         {selectedPlayer && <PlayerDetailModal player={selectedPlayer} onClose={() => setSelectedPlayer(null)} />}
-        {letterWriteOpen && (
-          <LetterWriteModal value={letterDraft} setValue={setLetterDraft}
-            onSend={sendLetter} onClose={() => setLetterWriteOpen(false)} />
-        )}
+        {letterWriteOpen && <LetterWriteModal value={letterDraft} setValue={setLetterDraft} onSend={sendLetter} onClose={() => setLetterWriteOpen(false)} />}
         {readingLetter && <LetterReadModal letter={readingLetter} onClose={closeReadingLetter} />}
         {inventoryOpen && (
           <InventoryModal items={inventory} totalDistancePx={totalDistancePx} onClose={() => setInventoryOpen(false)}
@@ -1423,168 +1117,49 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: WATER_COLOR, overflow: 'hidden' },
   canvas: { flex: 1 },
   map: { position: 'absolute', backgroundColor: WATER_COLOR },
-  player: {
-    position: 'absolute', width: 28, height: 28, borderRadius: 14,
-    backgroundColor: '#ff6b6b', borderWidth: 3, borderColor: '#fff',
-  },
-  otherPlayer: {
-    position: 'absolute', width: 24, height: 24, borderRadius: 12,
-    borderWidth: 2, borderColor: '#fff', opacity: 0.95,
-  },
-  otherPlayerLabel: {
-    position: 'absolute', left: 0, top: 0, width: 120,
-    textAlign: 'center', color: '#fff', fontSize: 11, fontWeight: '600',
-    lineHeight: 14, textShadowColor: 'rgba(0,0,0,0.7)', textShadowRadius: 3,
-  },
-  targetMarker: {
-    position: 'absolute', width: 28, height: 28, borderRadius: 14,
-    backgroundColor: 'rgba(255,217,61,0.25)', borderWidth: 2, borderColor: '#ffd93d',
-    justifyContent: 'center', alignItems: 'center',
-  },
+  player: { position: 'absolute', width: 28, height: 28, borderRadius: 14, backgroundColor: '#ff6b6b', borderWidth: 3, borderColor: '#fff' },
+  otherPlayer: { position: 'absolute', width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: '#fff', opacity: 0.95 },
+  otherPlayerLabel: { position: 'absolute', left: 0, top: 0, width: 120, textAlign: 'center', color: '#fff', fontSize: 11, fontWeight: '600', lineHeight: 14, textShadowColor: 'rgba(0,0,0,0.7)', textShadowRadius: 3 },
+  targetMarker: { position: 'absolute', width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(255,217,61,0.25)', borderWidth: 2, borderColor: '#ffd93d', justifyContent: 'center', alignItems: 'center' },
   targetInner: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#ffd93d' },
-  previewTargetOuter: {
-    position: 'absolute', width: 36, height: 36, borderRadius: 18,
-    borderWidth: 2, borderColor: '#ffd93d', backgroundColor: 'rgba(255,217,61,0.18)',
-  },
-  previewTargetInner: {
-    position: 'absolute', width: 12, height: 12, borderRadius: 6, backgroundColor: '#ffd93d',
-  },
+  previewTargetOuter: { position: 'absolute', width: 36, height: 36, borderRadius: 18, borderWidth: 2, borderColor: '#ffd93d', backgroundColor: 'rgba(255,217,61,0.18)' },
+  previewTargetInner: { position: 'absolute', width: 12, height: 12, borderRadius: 6, backgroundColor: '#ffd93d' },
   hud: { position: 'absolute', top: 60, left: 0, right: 0, alignItems: 'center' },
-  hudText: {
-    color: '#fff', backgroundColor: 'rgba(0,0,0,0.6)',
-    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
-    fontSize: 13, fontWeight: '600',
-  },
-  recenterBtn: {
-    position: 'absolute', bottom: 156, right: 16,
-    width: 48, height: 48, borderRadius: 24,
-    backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border,
-    justifyContent: 'center', alignItems: 'center',
-    ...THEME.shadow, shadowRadius: 12,
-  },
+  hudText: { color: '#fff', backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20, fontSize: 13, fontWeight: '600' },
+  recenterBtn: { position: 'absolute', bottom: 156, right: 16, width: 48, height: 48, borderRadius: 24, backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border, justifyContent: 'center', alignItems: 'center', ...THEME.shadow, shadowRadius: 12 },
   iconText: { color: THEME.text, fontSize: 22, fontWeight: '700' },
-  speedBtn: {
-    position: 'absolute', bottom: 160, left: 16,
-    paddingHorizontal: 16, paddingVertical: 10, borderRadius: 22,
-    backgroundColor: 'rgba(0,0,0,0.7)', minWidth: 80, alignItems: 'center',
-  },
+  speedBtn: { position: 'absolute', bottom: 160, left: 16, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 22, backgroundColor: 'rgba(0,0,0,0.7)', minWidth: 80, alignItems: 'center' },
   speedBtnActive: { backgroundColor: '#ff6b6b' },
   speedText: { color: '#fff', fontSize: 14, fontWeight: '700' },
-  onlineBadge: {
-    position: 'absolute', top: TOP_SAFE, left: 16,
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border,
-    paddingHorizontal: 10, paddingVertical: 6, borderRadius: THEME.radiusLg,
-    ...THEME.shadow, shadowRadius: 10,
-  },
+  onlineBadge: { position: 'absolute', top: TOP_SAFE, left: 16, flexDirection: 'row', alignItems: 'center', backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border, paddingHorizontal: 10, paddingVertical: 6, borderRadius: THEME.radiusLg, ...THEME.shadow, shadowRadius: 10 },
   onlineDot: { width: 9, height: 9, borderRadius: 4.5, marginRight: 7, borderWidth: 1, borderColor: THEME.border },
   onlineText: { color: THEME.text, fontSize: 12, fontWeight: '700' },
   recenterBtnText: { color: THEME.text, fontSize: 22 },
-  settingsBtn: {
-    position: 'absolute', top: TOP_SAFE, right: 16,
-    width: 48, height: 48, borderRadius: 24,
-    backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border,
-    justifyContent: 'center', alignItems: 'center',
-    ...THEME.shadow, shadowRadius: 10,
-  },
-  inventoryBtn: {
-    position: 'absolute', top: TOP_SAFE, right: 76,
-    width: 48, height: 48, borderRadius: 24,
-    backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border,
-    justifyContent: 'center', alignItems: 'center',
-    ...THEME.shadow, shadowRadius: 10,
-  },
-  inventoryBadge: {
-    position: 'absolute', top: -4, right: -4,
-    minWidth: 18, height: 18, borderRadius: 9,
-    backgroundColor: THEME.danger, borderWidth: 1.5, borderColor: THEME.card,
-    paddingHorizontal: 4, justifyContent: 'center', alignItems: 'center',
-  },
+  settingsBtn: { position: 'absolute', top: TOP_SAFE, right: 16, width: 48, height: 48, borderRadius: 24, backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border, justifyContent: 'center', alignItems: 'center', ...THEME.shadow, shadowRadius: 10 },
+  inventoryBtn: { position: 'absolute', top: TOP_SAFE, right: 76, width: 48, height: 48, borderRadius: 24, backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border, justifyContent: 'center', alignItems: 'center', ...THEME.shadow, shadowRadius: 10 },
+  inventoryBadge: { position: 'absolute', top: -4, right: -4, minWidth: 18, height: 18, borderRadius: 9, backgroundColor: THEME.danger, borderWidth: 1.5, borderColor: THEME.card, paddingHorizontal: 4, justifyContent: 'center', alignItems: 'center' },
   inventoryBadgeText: { color: '#fff', fontSize: 10, fontWeight: '800' },
-  letterBtn: {
-    position: 'absolute', bottom: 90, right: 16,
-    width: 48, height: 48, borderRadius: 24,
-    backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border,
-    justifyContent: 'center', alignItems: 'center',
-    ...THEME.shadow, shadowRadius: 12,
-  },
-  tripSummaryOverlay: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'center', alignItems: 'center',
-  },
-  tripSummaryModal: {
-    backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border,
-    borderRadius: THEME.radiusLg, paddingHorizontal: 20, paddingVertical: 24,
-    alignItems: 'stretch', width: '88%', maxWidth: 360,
-    ...THEME.shadow, shadowRadius: 20,
-  },
-  tripSummaryTitle: {
-    color: THEME.text, fontSize: 17, fontWeight: '800',
-    marginBottom: 4, textAlign: 'center',
-  },
-  tripSummaryText: {
-    color: THEME.text, fontSize: 14, fontWeight: '600',
-    textAlign: 'center', marginBottom: 12, opacity: 0.7,
-  },
-  tripSummaryPickups: {
-    width: '100%', backgroundColor: 'rgba(0,0,0,0.08)',
-    borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10,
-    marginBottom: 14, alignItems: 'flex-start',
-  },
-  tripSummaryPickupsTitle: {
-    color: THEME.text, fontSize: 13, fontWeight: '700', marginBottom: 6, opacity: 0.9,
-  },
-  tripSummaryPickupLine: {
-    color: THEME.text, fontSize: 13, fontWeight: '400', opacity: 0.8, lineHeight: 20,
-  },
-  tripSummaryBtn: {
-    backgroundColor: THEME.accent || '#3a7ea8',
-    paddingHorizontal: 32, paddingVertical: 12, borderRadius: 24,
-    alignItems: 'center', marginTop: 4,
-  },
+  letterBtn: { position: 'absolute', bottom: 90, right: 16, width: 48, height: 48, borderRadius: 24, backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border, justifyContent: 'center', alignItems: 'center', ...THEME.shadow, shadowRadius: 12 },
+  tripSummaryOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center' },
+  tripSummaryModal: { backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border, borderRadius: THEME.radiusLg, paddingHorizontal: 20, paddingVertical: 24, alignItems: 'stretch', width: '88%', maxWidth: 360, ...THEME.shadow, shadowRadius: 20 },
+  tripSummaryTitle: { color: THEME.text, fontSize: 17, fontWeight: '800', marginBottom: 4, textAlign: 'center' },
+  tripSummaryText: { color: THEME.text, fontSize: 14, fontWeight: '600', textAlign: 'center', marginBottom: 12, opacity: 0.7 },
+  tripSummaryPickups: { width: '100%', backgroundColor: 'rgba(0,0,0,0.08)', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 14, alignItems: 'flex-start' },
+  tripSummaryPickupsTitle: { color: THEME.text, fontSize: 13, fontWeight: '700', marginBottom: 6, opacity: 0.9 },
+  tripSummaryPickupLine: { color: THEME.text, fontSize: 13, fontWeight: '400', opacity: 0.8, lineHeight: 20 },
+  tripSummaryBtn: { backgroundColor: THEME.accent || '#3a7ea8', paddingHorizontal: 32, paddingVertical: 12, borderRadius: 24, alignItems: 'center', marginTop: 4 },
   tripSummaryBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
-  playersModalOverlay: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'flex-start', alignItems: 'flex-start',
-    paddingTop: TOP_SAFE + 48, paddingLeft: 16,
-  },
-  playersModalCard: {
-    backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border,
-    borderRadius: THEME.radiusLg, paddingHorizontal: 16, paddingVertical: 16,
-    width: 280, maxWidth: '90%',
-    ...THEME.shadow, shadowRadius: 16,
-  },
-  playersModalTitle: {
-    color: THEME.text, fontSize: 15, fontWeight: '800',
-    marginBottom: 12, textAlign: 'center',
-  },
-  playersModalEmpty: {
-    color: THEME.text, fontSize: 13, opacity: 0.6,
-    textAlign: 'center', marginBottom: 12,
-  },
-  playerRow: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: THEME.border,
-  },
-  playerRowDot: {
-    width: 10, height: 10, borderRadius: 5, marginRight: 8,
-  },
-  playerRowName: {
-    flex: 1, color: THEME.text, fontSize: 13, fontWeight: '600',
-  },
+  playersModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-start', alignItems: 'flex-start', paddingTop: TOP_SAFE + 48, paddingLeft: 16 },
+  playersModalCard: { backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border, borderRadius: THEME.radiusLg, paddingHorizontal: 16, paddingVertical: 16, width: 280, maxWidth: '90%', ...THEME.shadow, shadowRadius: 16 },
+  playersModalTitle: { color: THEME.text, fontSize: 15, fontWeight: '800', marginBottom: 12, textAlign: 'center' },
+  playersModalEmpty: { color: THEME.text, fontSize: 13, opacity: 0.6, textAlign: 'center', marginBottom: 12 },
+  playerRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: THEME.border },
+  playerRowDot: { width: 10, height: 10, borderRadius: 5, marginRight: 8 },
+  playerRowName: { flex: 1, color: THEME.text, fontSize: 13, fontWeight: '600' },
   playerRowNameOffline: { opacity: 0.5 },
   playerRowStatus: { fontSize: 14, marginRight: 6 },
-  heartBtn: {
-    width: 36, height: 36, borderRadius: 18,
-    justifyContent: 'center', alignItems: 'center',
-    backgroundColor: 'transparent',
-  },
-  heartBtnActive: {
-    backgroundColor: 'rgba(255,77,109,0.12)',
-  },
-  playersModalCloseBtn: {
-    marginTop: 12, backgroundColor: THEME.accent || '#3a7ea8',
-    paddingVertical: 10, borderRadius: 20, alignItems: 'center',
-  },
+  heartBtn: { width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center', backgroundColor: 'transparent' },
+  heartBtnActive: { backgroundColor: 'rgba(255,77,109,0.12)' },
+  playersModalCloseBtn: { marginTop: 12, backgroundColor: THEME.accent || '#3a7ea8', paddingVertical: 10, borderRadius: 20, alignItems: 'center' },
   playersModalCloseBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
 });

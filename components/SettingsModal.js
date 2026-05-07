@@ -25,6 +25,14 @@ export default function SettingsModal({
   onDebugSpeedPressIn,
   onDebugSpeedPressOut,
   debugSpeedMul,
+  // Sillons debug
+  onDebugBoostSillons,
+  onDebugFastErosion,
+  onDebugResetSillons,
+  onDebugSuperSillon,
+  sillonsStats,
+  showPathLayer,
+  onTogglePathLayer,
 }) {
   const outfit = profile?.outfit || 'red';
   const skin = profile?.skin || 'light';
@@ -43,7 +51,7 @@ export default function SettingsModal({
           <AdventurerPreview outfit={outfit} skin={skin} hair={hair} hat={hat} size={120} />
         </View>
 
-        <ScrollView style={{ maxHeight: 380 }}>
+        <ScrollView style={{ maxHeight: 420 }}>
           <Section label="Pseudo">
             <TextInput
               value={draftName}
@@ -122,12 +130,12 @@ export default function SettingsModal({
             </TouchableOpacity>
           </View>
 
-          {/* Section debug — visible seulement quand activé */}
+          {/* Section debug */}
           {debugEnabled && (
             <View style={styles.debugSection}>
               <Text style={styles.debugSectionLabel}>Actions debug</Text>
 
-              {/* 1. Accélération — toujours en premier */}
+              {/* Accélération */}
               <TouchableOpacity
                 style={[
                   styles.debugActionBtn,
@@ -141,19 +149,89 @@ export default function SettingsModal({
                   styles.debugActionText,
                   debugSpeedMul > 1 && styles.debugActionTextActive,
                 ]}>
-                  ⏩ Accélération{debugSpeedMul > 1 ? ` ×${debugSpeedMul}` : ''}
+                  ⏩ Accélération{debugSpeedMul > 1 ? ` ×${debugSpeedMul}` : ''}
                 </Text>
                 <Text style={styles.debugActionHint}>Maintenir pour accélérer</Text>
               </TouchableOpacity>
 
-              {/* 2. Générer un message */}
+              {/* Générer un message */}
               {onDebugGenerateMessage && (
                 <TouchableOpacity
                   style={styles.debugActionBtn}
                   onPress={onDebugGenerateMessage}
                   activeOpacity={0.75}
                 >
-                  <Text style={styles.debugActionText}>📜 Générer un message au sol</Text>
+                  <Text style={styles.debugActionText}>📜 Générer un message au sol</Text>
+                </TouchableOpacity>
+              )}
+
+              {/* ─── SILLONS ─── */}
+              <Text style={[styles.debugSectionLabel, { marginTop: 10 }]}>Sillons</Text>
+
+              {/* Stats */}
+              {sillonsStats && (
+                <View style={styles.debugStatsBox}>
+                  <Text style={styles.debugStatsText}>
+                    {`Total: ${sillonsStats.total} tiles · max ${sillonsStats.maxCount}`}
+                  </Text>
+                </View>
+              )}
+
+              {/* Toggle PathLayer */}
+              <View style={[styles.row, { marginTop: 4 }]}>
+                <Text style={styles.label}>Afficher les sillons</Text>
+                <TouchableOpacity
+                  onPress={onTogglePathLayer}
+                  style={[styles.toggle, showPathLayer && styles.toggleOn]}
+                >
+                  <View style={[styles.knob, showPathLayer && styles.knobOn]} />
+                </TouchableOpacity>
+              </View>
+
+              {/* Boost zone */}
+              {onDebugBoostSillons && (
+                <TouchableOpacity
+                  style={styles.debugActionBtn}
+                  onPress={onDebugBoostSillons}
+                  activeOpacity={0.75}
+                >
+                  <Text style={styles.debugActionText}>🌿 Boost zone (r=5, +50)</Text>
+                  <Text style={styles.debugActionHint}>Crée des sillons autour de ta position</Text>
+                </TouchableOpacity>
+              )}
+
+              {/* Super Sillon x50 — 5min érosion */}
+              {onDebugSuperSillon && (
+                <TouchableOpacity
+                  style={[styles.debugActionBtn, styles.debugActionBtnSuper]}
+                  onPress={onDebugSuperSillon}
+                  activeOpacity={0.75}
+                >
+                  <Text style={[styles.debugActionText, styles.debugActionTextSuper]}>🚀 Super Sillon ×50</Text>
+                  <Text style={styles.debugActionHint}>+50 passages sur ta case · disparaît en 5min</Text>
+                </TouchableOpacity>
+              )}
+
+              {/* Érosion rapide 7j */}
+              {onDebugFastErosion && (
+                <TouchableOpacity
+                  style={styles.debugActionBtn}
+                  onPress={onDebugFastErosion}
+                  activeOpacity={0.75}
+                >
+                  <Text style={styles.debugActionText}>⏳ Simuler 7 jours d'érosion</Text>
+                  <Text style={styles.debugActionHint}>Fait repousser la végétation</Text>
+                </TouchableOpacity>
+              )}
+
+              {/* Reset */}
+              {onDebugResetSillons && (
+                <TouchableOpacity
+                  style={[styles.debugActionBtn, styles.debugActionBtnDanger]}
+                  onPress={onDebugResetSillons}
+                  activeOpacity={0.75}
+                >
+                  <Text style={[styles.debugActionText, styles.debugActionTextDanger]}>🗑 Reset tous les sillons</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -258,7 +336,6 @@ const styles = StyleSheet.create({
     paddingVertical: 12, borderRadius: THEME.radiusMd, alignItems: 'center',
   },
   closeText: { color: THEME.textOnDark, fontSize: 15, fontWeight: '700' },
-  // Section debug
   debugSection: {
     marginTop: 10,
     borderTopWidth: 1, borderTopColor: THEME.borderSoft,
@@ -281,7 +358,22 @@ const styles = StyleSheet.create({
     backgroundColor: '#ff6b6b',
     borderColor: '#ff6b6b',
   },
+  debugActionBtnSuper: {
+    backgroundColor: 'rgba(58,126,168,0.12)',
+    borderColor: '#3a7ea8',
+  },
+  debugActionBtnDanger: {
+    backgroundColor: 'rgba(220,50,50,0.08)',
+    borderColor: '#dc3232',
+  },
   debugActionText: { color: '#8b4513', fontSize: 13, fontWeight: '700' },
   debugActionTextActive: { color: '#fff' },
+  debugActionTextSuper: { color: '#3a7ea8' },
+  debugActionTextDanger: { color: '#dc3232' },
   debugActionHint: { color: THEME.textMuted, fontSize: 10, marginTop: 2 },
+  debugStatsBox: {
+    backgroundColor: 'rgba(0,0,0,0.05)',
+    borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6,
+  },
+  debugStatsText: { color: THEME.textMuted, fontSize: 11, fontWeight: '600' },
 });
