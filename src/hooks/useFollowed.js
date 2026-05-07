@@ -1,12 +1,22 @@
-// Hook logique suivi joueurs — persistance AsyncStorage + sync Firebase.
-import { useCallback } from 'react';
+// Hook persistance followedPlayers : AsyncStorage + sync Firebase optionnel.
+import { useCallback, useEffect, useRef } from 'react';
 import usePersistedState from './usePersistedState';
 import { updateMyProfile } from '../../firebase';
 
-export const FOLLOWED_KEY = '@treasureProto.followedPlayers.v1';
+const FOLLOWED_KEY = '@treasureProto.followedPlayers.v1';
+const SYNC_THROTTLE_MS = 2000;
 
 export default function useFollowed() {
   const [followedPlayers, setFollowedPlayers, loaded] = usePersistedState(FOLLOWED_KEY, []);
+  const lastSyncRef = useRef(0);
+
+  // Sync Firebase throttlée
+  const syncToFirebase = useCallback((list) => {
+    const now = Date.now();
+    if (now - lastSyncRef.current < SYNC_THROTTLE_MS) return;
+    lastSyncRef.current = now;
+    updateMyProfile({ followedPlayers: list }).catch(() => {});
+  }, []);
 
   const isFollowed = useCallback(
     (playerId) => followedPlayers.some((p) => p.id === playerId),
@@ -16,20 +26,16 @@ export default function useFollowed() {
   const toggleFollow = useCallback(
     (player) => {
       setFollowedPlayers((prev) => {
-        let next;
-        if (prev.some((p) => p.id === player.id)) {
-          next = prev.filter((p) => p.id !== player.id);
-        } else {
-          next = [...prev, { id: player.id, name: player.name, color: player.color }];
-        }
-        try { updateMyProfile({ followedPlayers: next }); } catch (e) {}
+        const exists = prev.some((p) => p.id === player.id);
+        const next = exists
+          ? prev.filter((p) => p.id !== player.id)
+          : [...prev, { id: player.id, name: player.name, color: player.color }];
+        syncToFirebase(next);
         return next;
       });
     },
-    [setFollowedPlayers]
+    [setFollowedPlayers, syncToFirebase]
   );
 
-  const getFollowedPlayers = useCallback(() => followedPlayers, [followedPlayers]);
-
-  return { followedPlayers, isFollowed, toggleFollow, getFollowedPlayers, loaded };
+  return { followedPlayers, isFollowed, toggleFollow, followedLoaded: loaded };
 }
