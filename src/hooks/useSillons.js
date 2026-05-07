@@ -1,6 +1,6 @@
 // Hook React — état persisté des sillons + érosion auto + helpers debug.
 import { useEffect, useRef, useCallback } from 'react';
-import { usePersistedState } from './usePersistedState';
+import usePersistedState from './usePersistedState';
 import {
   incrementPath,
   erosionTick,
