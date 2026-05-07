@@ -1,6 +1,11 @@
 // TripSummaryModal — récap de trajet style Strava
 // Props:
-//   trip: { samples, distancePx, durationMs, collectedLetters: [{authorName, authorColor, text}] }
+//   trip: {
+//     samples, distancePx, durationMs,
+//     collectedLetters: [{authorName, authorColor, text}],
+//     xpBefore: number,   // totalDistancePx avant le trajet
+//     xpAfter:  number,   // totalDistancePx après le trajet
+//   }
 //   onClose: () => void
 
 import React, { useEffect, useRef } from 'react';
@@ -11,14 +16,14 @@ import {
 import Svg, { Polyline, Circle } from 'react-native-svg';
 import { THEME } from '../src/theme';
 import { formatDuration } from '../src/format';
+import XPBar from './XPBar';
 
 const { width: SCREEN_W } = Dimensions.get('window');
-const MAP_SIZE = 200; // taille de la mini-map dans le modal
+const MAP_SIZE = 200;
 
 function MiniMap({ samples }) {
   if (!samples || samples.length < 2) return null;
 
-  // Calcul bounding box
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const p of samples) {
     if (p.x < minX) minX = p.x;
@@ -60,7 +65,6 @@ function MiniMap({ samples }) {
 }
 
 function formatMetersLocal(px) {
-  // 1 px map = ~1 m (pour l'affichage)
   if (px >= 1000) return `${(px / 1000).toFixed(2)} km`;
   return `${Math.round(px)} m`;
 }
@@ -83,9 +87,10 @@ export default function TripSummaryModal({ trip, onClose }) {
     ]).start(() => onClose());
   };
 
-  const { samples, distancePx, durationMs, collectedLetters = [] } = trip;
+  const { samples, distancePx, durationMs, collectedLetters = [], xpBefore = 0, xpAfter = 0 } = trip;
   const durStr = formatDuration(Math.round(durationMs / 1000));
   const distStr = formatMetersLocal(distancePx);
+  const xpGain = Math.max(0, xpAfter - xpBefore);
 
   return (
     <Animated.View style={[styles.backdrop, { opacity: fadeAnim }]}>
@@ -120,6 +125,12 @@ export default function TripSummaryModal({ trip, onClose }) {
             <Text style={styles.statValue}>{collectedLetters.length}</Text>
             <Text style={styles.statLabel}>Message{collectedLetters.length > 1 ? 's' : ''}</Text>
           </View>
+        </View>
+
+        {/* ── Progression XP animée ── */}
+        <View style={styles.xpSection}>
+          <Text style={styles.sectionTitle}>Progression</Text>
+          <XPBar totalDistancePx={xpAfter} gainPx={xpGain} />
         </View>
 
         {/* Messages ramassés */}
@@ -188,6 +199,7 @@ const styles = StyleSheet.create({
   statValue: { fontSize: 20, fontWeight: '800', color: THEME.text },
   statLabel: { fontSize: 11, color: THEME.textMuted || '#aaa', marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.8 },
   statDivider: { width: 1, height: 36, backgroundColor: THEME.border || 'rgba(255,255,255,0.12)' },
+  xpSection: { marginBottom: 14 },
   lettersSection: { marginBottom: 18 },
   sectionTitle: { fontSize: 13, fontWeight: '700', color: THEME.textMuted || '#aaa', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.8 },
   lettersList: { maxHeight: 160 },

@@ -1,131 +1,12 @@
 // Modal Inventaire : liste des messages ramassés, regroupés par auteur.
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   StyleSheet, View, Text, ScrollView, Animated,
   TouchableWithoutFeedback, TouchableOpacity,
 } from 'react-native';
 import { ScrollText, Trash2, ChevronDown, ChevronRight } from 'lucide-react-native';
 import { THEME } from '../src/theme';
-
-// ─── Système de niveaux ───────────────────────────────────────────────────────
-const PX_PER_LIEUE = 400;
-
-const LEVELS = [
-  { level: 1,  title: 'Novice',          minLieues: 0    },
-  { level: 2,  title: 'Marcheur',        minLieues: 5    },
-  { level: 3,  title: 'Explorateur',     minLieues: 15   },
-  { level: 4,  title: 'Aventurier',      minLieues: 35   },
-  { level: 5,  title: 'Éclaireur',       minLieues: 70   },
-  { level: 6,  title: 'Ranger',          minLieues: 120  },
-  { level: 7,  title: 'Cartographe',     minLieues: 200  },
-  { level: 8,  title: 'Pionnier',        minLieues: 320  },
-  { level: 9,  title: 'Légende',         minLieues: 500  },
-  { level: 10, title: 'Maître du Monde', minLieues: 750  },
-];
-
-function getLevelInfo(totalDistancePx) {
-  const lieues = (totalDistancePx || 0) / PX_PER_LIEUE;
-  let current = LEVELS[0];
-  let next = LEVELS[1];
-  for (let i = LEVELS.length - 1; i >= 0; i--) {
-    if (lieues >= LEVELS[i].minLieues) {
-      current = LEVELS[i];
-      next = LEVELS[i + 1] || null;
-      break;
-    }
-  }
-  const progress = next
-    ? (lieues - current.minLieues) / (next.minLieues - current.minLieues)
-    : 1;
-  return { current, next, lieues: Math.floor(lieues), progress: Math.min(1, Math.max(0, progress)) };
-}
-
-function LevelBanner({ totalDistancePx }) {
-  const { current, next, lieues, progress } = getLevelInfo(totalDistancePx);
-  const barAnim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.timing(barAnim, {
-      toValue: progress,
-      duration: 700,
-      useNativeDriver: false,
-    }).start();
-  }, [progress]);
-
-  const barWidth = barAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0%', '100%'],
-  });
-
-  return (
-    <View style={lvlStyles.container}>
-      <View style={lvlStyles.topRow}>
-        <View style={lvlStyles.badge}>
-          <Text style={lvlStyles.badgeLvl}>Niv.</Text>
-          <Text style={lvlStyles.badgeNum}>{current.level}</Text>
-        </View>
-        <View style={{ flex: 1, marginLeft: 8 }}>
-          <Text style={lvlStyles.title}>{current.title}</Text>
-          <Text style={lvlStyles.sub}>
-            {lieues} lieue{lieues !== 1 ? 's' : ''} parcourue{lieues !== 1 ? 's' : ''}
-            {next ? ` · prochain : ${next.minLieues} lieues` : ' · Niveau max !'}
-          </Text>
-        </View>
-        {current.level === 10 && (
-          <Text style={lvlStyles.crown}>👑</Text>
-        )}
-      </View>
-      <View style={lvlStyles.track}>
-        <Animated.View style={[lvlStyles.fill, { width: barWidth }]} />
-      </View>
-      {next && (
-        <View style={lvlStyles.labels}>
-          <Text style={lvlStyles.labelText}>{current.minLieues}</Text>
-          <Text style={lvlStyles.labelText}>{next.minLieues}</Text>
-        </View>
-      )}
-    </View>
-  );
-}
-
-const lvlStyles = StyleSheet.create({
-  container: {
-    backgroundColor: '#f4e4bc',
-    borderRadius: THEME.radiusMd,
-    borderWidth: 1,
-    borderColor: THEME.border,
-    padding: 10,
-    marginBottom: 10,
-  },
-  topRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 7,
-  },
-  badge: {
-    width: 42, height: 42, borderRadius: 21,
-    backgroundColor: THEME.accent,
-    justifyContent: 'center', alignItems: 'center',
-    borderWidth: 2, borderColor: THEME.accentDark,
-  },
-  badgeLvl: {
-    fontSize: 8, fontWeight: '700', color: THEME.textOnDark,
-    letterSpacing: 0.5, lineHeight: 10,
-  },
-  badgeNum: {
-    fontSize: 18, fontWeight: '800', color: THEME.textOnDark, lineHeight: 20,
-  },
-  title: { fontSize: 14, fontWeight: '700', color: THEME.text },
-  sub: { fontSize: 10, color: THEME.textMuted, marginTop: 1 },
-  crown: { fontSize: 20, marginLeft: 6 },
-  track: {
-    height: 8, backgroundColor: 'rgba(58,38,20,0.15)',
-    borderRadius: 4, overflow: 'hidden',
-  },
-  fill: { height: '100%', backgroundColor: THEME.accent, borderRadius: 4 },
-  labels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 3 },
-  labelText: { fontSize: 9, color: THEME.textMuted },
-});
+import XPBar from './XPBar';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const formatDate = (ts) => {
@@ -190,8 +71,8 @@ export default function InventoryModal({ items, totalDistancePx, onClose, onMark
       </TouchableWithoutFeedback>
       <View style={styles.card}>
 
-        {/* ── Bandeau niveau (au-dessus de tout) ── */}
-        <LevelBanner totalDistancePx={totalDistancePx} />
+        {/* ── Barre XP (sans animation de gain ici) ── */}
+        <XPBar totalDistancePx={totalDistancePx} />
 
         <Text style={styles.kicker}>MESSAGERIE</Text>
         <Text style={styles.title}>
