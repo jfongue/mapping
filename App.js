@@ -36,6 +36,7 @@ import {
 } from './src/notifications';
 
 const INVENTORY_KEY = '@treasureProto.inventory.v1';
+const TOTAL_DISTANCE_KEY = 'TOTAL_DISTANCE_KEY';
 const LETTER_PICKUP_RADIUS = 130;
 const PLAYER_NEAR_RADIUS = 130;
 const RECENTER_HIDE_RADIUS = 90;
@@ -44,6 +45,7 @@ import { TILES_DATA, MAP_W, MAP_H, TILE_PX, WALKABLE, findPath } from './src/til
 import { sampleAt } from './src/smoothing';
 import TileLayer, { MAP_W_PX, MAP_H_PX } from './components/TileLayer';
 import DottedTrail from './components/DottedTrail';
+import XPBar from './components/XPBar';
 
 const WATER_COLOR = '#bce0e8';
 
@@ -178,6 +180,9 @@ export default function App() {
   // Récapitulatif de fin de trajet
   const [tripSummary, setTripSummary] = useState(null);
   const tripStartedAtRef = useRef(null);
+
+  // Distance totale cumulée
+  const [totalDistancePx, setTotalDistancePx] = useState(0);
 
   const globalNowRef = useRef(Date.now());
 
@@ -445,6 +450,15 @@ export default function App() {
     if (!inventoryLoaded) return;
     AsyncStorage.setItem(INVENTORY_KEY, JSON.stringify(inventory)).catch(() => {});
   }, [inventory, inventoryLoaded]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(TOTAL_DISTANCE_KEY);
+        if (raw) setTotalDistancePx(parseInt(raw) || 0);
+      } catch (e) {}
+    })();
+  }, []);
 
   useEffect(() => {
     const id = setInterval(() => { globalNowRef.current = Date.now(); }, 5000);
@@ -842,6 +856,15 @@ export default function App() {
       }
     }
 
+    if (tripDistancePx > 0) {
+      setTotalDistancePx((prev) => {
+        const newTotal = prev + tripDistancePx;
+        AsyncStorage.setItem(TOTAL_DISTANCE_KEY, newTotal.toString()).catch(() => {});
+        updateMyProfile({ totalDistancePx: newTotal }).catch(() => {});
+        return newTotal;
+      });
+    }
+
     if (tripDistancePx > 0 || tripDurationMs > 0) {
       showTripSummary(tripDistancePx, tripDurationMs, pickedUpItems);
     }
@@ -1033,6 +1056,7 @@ export default function App() {
                   <TouchableWithoutFeedback onPress={handleTap}>
                     <View style={StyleSheet.absoluteFill}>
                       <TileLayer />
+                      <XPBar totalDistancePx={totalDistancePx} />
                       {pendingTarget && (
                         <DottedTrail samples={pendingTarget.samples} color="#3a7ea8" spacing={26} size={6} opacity={0.95} />
                       )}
