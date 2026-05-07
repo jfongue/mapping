@@ -728,7 +728,7 @@ export default function App() {
       progressRef.current.removeListener(progressListenerId.current);
       progressListenerId.current = null;
     }
-    cancelArrivalNotification(); // trajet annulé manuellement
+    cancelArrivalNotification();
     pendingPickupRef.current = null;
     const cx = animX.__getValue();
     const cy = animY.__getValue();
@@ -738,7 +738,6 @@ export default function App() {
   const progressRef = useRef(null);
   const progressListenerId = useRef(null);
 
-  // Affiche le récapitulatif de fin de trajet (fermeture manuelle)
   const showTripSummary = (distancePx, durationMs, pickedUpItems = []) => {
     setTripSummary({
       distancePx: Math.max(0, Math.round(distancePx || 0)),
@@ -759,7 +758,7 @@ export default function App() {
     moveTarget.current = samples[samples.length - 1];
     moveBaseDuration.current = baseDuration;
     tripStartedAtRef.current = Date.now();
-    tripTotalLengthRef.current = length; // capture la longueur totale au démarrage
+    tripTotalLengthRef.current = length;
     setTripSummary(null);
     setMoving(true);
     const etaMs = Date.now() + dur;
@@ -772,7 +771,6 @@ export default function App() {
       startTs: Date.now(),
       durationMs: dur,
     });
-    // Planifie la notification d'arrivée
     const last = samples[samples.length - 1];
     const destLabel = `${Math.round(last.x / TILE_PX)}, ${Math.round(last.y / TILE_PX)}`;
     scheduleArrivalNotification(etaMs, destLabel);
@@ -803,7 +801,6 @@ export default function App() {
   };
 
   const finalizeArrival = (final) => {
-    // Utilise la longueur totale capturée au démarrage du trajet (stable même si activePathRef a changé)
     const tripDistancePx = tripTotalLengthRef.current || 0;
     const tripDurationMs = tripStartedAtRef.current ? Date.now() - tripStartedAtRef.current : 0;
 
@@ -826,7 +823,6 @@ export default function App() {
     const pickup = pendingPickupRef.current;
     pendingPickupRef.current = null;
 
-    // Collecte les objets ramassés pour le récapitulatif
     const pickedUpItems = [];
 
     if (pickup && pickup.id) {
@@ -846,7 +842,6 @@ export default function App() {
       }
     }
 
-    // Affiche le récapitulatif si le trajet avait une distance mesurable
     if (tripDistancePx > 0 || tripDurationMs > 0) {
       showTripSummary(tripDistancePx, tripDurationMs, pickedUpItems);
     }
@@ -960,10 +955,8 @@ export default function App() {
     if (!dropPos) return;
     const msgIndex = Math.floor(Math.random() * DEBUG_MESSAGES.length);
     const text = DEBUG_MESSAGES[msgIndex];
-    // Choisir l'auteur selon l'index pour une bonne distribution
     const authorIndex = msgIndex % DEBUG_MESSAGE_AUTHORS.length;
     const author = DEBUG_MESSAGE_AUTHORS[authorIndex];
-    // Fermer les settings
     setSettingsOpen(false);
     try {
       await dropLetter({
@@ -974,7 +967,6 @@ export default function App() {
         y: dropPos.y,
         text,
       });
-      // Centrer la caméra sur le message généré
       centerOnPoint(dropPos.x, dropPos.y);
     } catch (e) {
       console.warn('debug drop letter failed', e);
@@ -1135,7 +1127,7 @@ export default function App() {
 
         {moving && <TravelingBar eta={eta} onStop={stopMove} />}
 
-        {/* Modale de fin de trajet — centrée, fermeture manuelle */}
+        {/* Modale de fin de trajet */}
         <Modal
           visible={!!tripSummary}
           transparent
@@ -1150,19 +1142,11 @@ export default function App() {
               </Text>
               {tripSummary?.pickedUpItems?.length > 0 && (
                 <View style={styles.tripSummaryPickups}>
-                  <Text style={styles.tripSummaryPickupsTitle}>
-                    📬 {tripSummary.pickedUpItems.length === 1 ? 'Message ramassé' : `${tripSummary.pickedUpItems.length} messages ramassés`}
-                  </Text>
+                  <Text style={styles.tripSummaryPickupsTitle}>Vous avez trouvé :</Text>
                   {tripSummary.pickedUpItems.map((item) => (
-                    <View key={item.id} style={styles.tripSummaryPickupItem}>
-                      <View style={[styles.tripSummaryPickupDot, { backgroundColor: item.authorColor || '#8b4513' }]} />
-                      <Text style={styles.tripSummaryPickupAuthor} numberOfLines={1}>
-                        {item.authorName || 'Anonyme'}
-                      </Text>
-                      <Text style={styles.tripSummaryPickupText} numberOfLines={2}>
-                        {item.text}
-                      </Text>
-                    </View>
+                    <Text key={item.id} style={styles.tripSummaryPickupLine}>
+                      {'- nouveau message de '}{item.authorName || 'Anonyme'}
+                    </Text>
                   ))}
                 </View>
               )}
@@ -1179,7 +1163,6 @@ export default function App() {
           </TouchableOpacity>
         )}
 
-        {/* Bouton debug vitesse — bas gauche */}
         {debugEnabled && (
           <TouchableOpacity
             style={[styles.speedBtn, speedMul > 1 && styles.speedBtnActive]}
@@ -1392,42 +1375,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 10,
     marginBottom: 18,
+    alignItems: 'flex-start',
   },
   tripSummaryPickupsTitle: {
     color: THEME.text,
     fontSize: 13,
     fontWeight: '700',
-    marginBottom: 8,
-    opacity: 0.9,
-  },
-  tripSummaryPickupItem: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
     marginBottom: 6,
-    gap: 8,
-  },
-  tripSummaryPickupDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginTop: 4,
-    flexShrink: 0,
-  },
-  tripSummaryPickupAuthor: {
-    color: THEME.text,
-    fontSize: 12,
-    fontWeight: '700',
-    flexShrink: 0,
-    maxWidth: 80,
     opacity: 0.9,
   },
-  tripSummaryPickupText: {
+  tripSummaryPickupLine: {
     color: THEME.text,
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '400',
-    flex: 1,
-    opacity: 0.75,
-    lineHeight: 16,
+    opacity: 0.8,
+    lineHeight: 20,
   },
   tripSummaryBtn: {
     backgroundColor: THEME.accent || '#3a7ea8',
