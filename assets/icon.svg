@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <rect width="1024" height="1024" rx="200" fill="#f8f8f8"/>
+  <g stroke="#333" stroke-width="25" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <!-- X crossed lines with map texture -->
+    <path d="M200 200 L824 824 M200 824 L824 200"/>
+    <!-- Compass center -->
+    <circle cx="512" cy="512" r="120" stroke="#333" stroke-width="20"/>
+    <!-- Compass points -->
+    <line x1="512" y1="392" x2="512" y2="272" stroke="#333" stroke-width="30"/>
+    <line x1="512" y1="752" x2="512" y2="632" stroke="#333" stroke-width="30"/>
+    <line x1="392" y1="512" x2="272" y2="512" stroke="#333" stroke-width="30"/>
+    <line x1="752" y1="512" x2="632" y2="512" stroke="#333" stroke-width="30"/>
+    <!-- Map folds -->
+    <path d="M300 600 Q512 550 724 600" stroke-width="18" opacity="0.6"/>
+    <path d="M512 400 Q512 650 512 750" stroke-width="18" opacity="0.6"/>
+    <!-- Small treasure mark -->
+    <circle cx="680" cy="340" r="40" stroke="#333" stroke-width="15"/>
+    <circle cx="680" cy="340" r="12"/>
+  </g>
+</svg>
