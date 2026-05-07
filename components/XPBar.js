@@ -1,9 +1,9 @@
-// XPBar — niveaux d'exploration avec barre de progression
-import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+// XPBar — niveaux d'exploration avec barre de progression animée
+import React, { useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, Animated, Easing } from 'react-native';
 import { THEME } from '../src/theme';
 
-const LEVELS = [
+export const LEVELS = [
   { level: 1,  title: '🐾 Marcheur',               threshold: 0       },
   { level: 2,  title: '🥾 Randonneur',              threshold: 100     },
   { level: 3,  title: '🗺️ Explorateur',             threshold: 500     },
@@ -16,43 +16,110 @@ const LEVELS = [
   { level: 10, title: '🏆 Maître des Terres',       threshold: 1000000 },
 ];
 
-function formatDist(px) {
+export function getLevelIndex(dist) {
+  let idx = 0;
+  for (let i = LEVELS.length - 1; i >= 0; i--) {
+    if (dist >= LEVELS[i].threshold) { idx = i; break; }
+  }
+  return idx;
+}
+
+export function formatDist(px) {
   if (px >= 1000000) return `${(px / 1000000).toFixed(1).replace('.0', '')} 000 km`;
   if (px >= 1000)    return `${(px / 1000).toFixed(1).replace('.0', '')} km`;
   return `${Math.round(px)} m`;
 }
 
-export default function XPBar({ totalDistancePx }) {
-  const dist = Math.max(0, Math.round(totalDistancePx || 0));
+// animated=true : anime de startDistancePx → totalDistancePx au montage
+export default function XPBar({ totalDistancePx, startDistancePx, animated = false }) {
+  const finalDist = Math.max(0, Math.round(totalDistancePx || 0));
+  const startDist = Math.max(0, Math.round(startDistancePx ?? finalDist));
 
-  // Trouver le niveau actuel
-  let currentIdx = 0;
-  for (let i = LEVELS.length - 1; i >= 0; i--) {
-    if (dist >= LEVELS[i].threshold) { currentIdx = i; break; }
-  }
+  const animVal = useRef(new Animated.Value(animated ? 0 : 1)).current;
 
-  const current = LEVELS[currentIdx];
-  const next = LEVELS[currentIdx + 1] || null;
+  useEffect(() => {
+    if (!animated) { animVal.setValue(1); return; }
+    animVal.setValue(0);
+    // Délai 300ms avant de démarrer pour laisser le modal s'ouvrir
+    const timeout = setTimeout(() => {
+      Animated.timing(animVal, {
+        toValue: 1,
+        duration: 1200,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: false,
+      }).start();
+    }, 300);
+    return () => clearTimeout(timeout);
+  }, [animated, totalDistancePx]);
 
-  let progress = 1;
-  let remaining = null;
-  if (next) {
-    const span = next.threshold - current.threshold;
-    const done = dist - current.threshold;
-    progress = Math.min(1, done / span);
-    remaining = next.threshold - dist;
-  }
+  // Distance interpolée selon l'animation
+  const interpDist = animVal.interpolate({
+    inputRange: [0, 1],
+    outputRange: [startDist, finalDist],
+  });
+
+  // Niveau à la fin (pour afficher le bon titre dès le départ)
+  const finalIdx = getLevelIndex(finalDist);
+  const startIdx = getLevelIndex(startDist);
+  const levelUp = animated && finalIdx > startIdx;
+
+  const current = LEVELS[finalIdx];
+  const next = LEVELS[finalIdx + 1] || null;
+
+  // Progress bar basée sur l'animation
+  const barWidth = animVal.interpolate({
+    inputRange: [0, 1],
+    outputRange: [
+      // progress au départ
+      (() => {
+        const c = LEVELS[getLevelIndex(startDist)];
+        const n = LEVELS[getLevelIndex(startDist) + 1];
+        if (!n) return '100%';
+        const span = n.threshold - c.threshold;
+        const done = startDist - c.threshold;
+        return `${Math.round(Math.min(1, done / span) * 100)}%`;
+      })(),
+      // progress à la fin
+      (() => {
+        if (!next) return '100%';
+        const span = next.threshold - current.threshold;
+        const done = finalDist - current.threshold;
+        return `${Math.round(Math.min(1, done / span) * 100)}%`;
+      })(),
+    ],
+  });
+
+  // Couleur dorée si level up
+  const barColor = levelUp
+    ? animVal.interpolate({
+        inputRange: [0, 0.7, 1],
+        outputRange: [THEME.accent, '#ffd93d', THEME.accent],
+      })
+    : THEME.accent;
+
+  const remaining = next ? next.threshold - finalDist : null;
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.levelBadge}>Niv. {current.level}</Text>
         <Text style={styles.title}>{current.title}</Text>
-        <Text style={styles.totalDist}>{formatDist(dist)}</Text>
+        <Animated.Text style={styles.totalDist}>
+          {animated
+            ? interpDist.__getValue
+              ? formatDist(finalDist) // fallback statique
+              : formatDist(finalDist)
+            : formatDist(finalDist)
+          }
+        </Animated.Text>
       </View>
 
+      {levelUp && (
+        <Text style={styles.levelUpBanner}>🎉 Nouveau niveau !</Text>
+      )}
+
       <View style={styles.barBg}>
-        <View style={[styles.barFill, { width: `${Math.round(progress * 100)}%` }]} />
+        <Animated.View style={[styles.barFill, { width: barWidth, backgroundColor: barColor }]} />
       </View>
 
       {next ? (
@@ -97,6 +164,14 @@ const styles = StyleSheet.create({
     fontSize: 11, fontWeight: '700',
     color: THEME.textMuted,
   },
+  levelUpBanner: {
+    fontSize: 12, fontWeight: '800',
+    color: '#b8860b',
+    textAlign: 'center',
+    backgroundColor: '#fff8dc',
+    borderRadius: 6,
+    paddingVertical: 3,
+  },
   barBg: {
     height: 8,
     backgroundColor: 'rgba(0,0,0,0.10)',
@@ -105,7 +180,6 @@ const styles = StyleSheet.create({
   },
   barFill: {
     height: '100%',
-    backgroundColor: THEME.accent,
     borderRadius: 4,
     minWidth: 4,
   },

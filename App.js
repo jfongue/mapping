@@ -45,6 +45,7 @@ import { TILES_DATA, MAP_W, MAP_H, TILE_PX, WALKABLE, findPath } from './src/til
 import { sampleAt } from './src/smoothing';
 import TileLayer, { MAP_W_PX, MAP_H_PX } from './components/TileLayer';
 import DottedTrail from './components/DottedTrail';
+import XPBar from './components/XPBar';
 
 const WATER_COLOR = '#bce0e8';
 
@@ -759,11 +760,12 @@ export default function App() {
   const progressRef = useRef(null);
   const progressListenerId = useRef(null);
 
-  const showTripSummary = (distancePx, durationMs, pickedUpItems = []) => {
+  const showTripSummary = (distancePx, durationMs, pickedUpItems = [], startDistancePx = 0) => {
     setTripSummary({
       distancePx: Math.max(0, Math.round(distancePx || 0)),
       durationMs: Math.max(0, Math.round(durationMs || 0)),
       pickedUpItems,
+      startDistancePx,
     });
   };
 
@@ -871,12 +873,14 @@ export default function App() {
         if (profileUpdate && typeof profileUpdate.catch === 'function') {
           profileUpdate.catch(() => {});
         }
+        // Passer startDist (avant ce trajet) pour l'animation XP
+        if (tripDistancePx > 0 || tripDurationMs > 0) {
+          showTripSummary(tripDistancePx, tripDurationMs, pickedUpItems, prev);
+        }
         return newTotal;
       });
-    }
-
-    if (tripDistancePx > 0 || tripDurationMs > 0) {
-      showTripSummary(tripDistancePx, tripDurationMs, pickedUpItems);
+    } else if (tripDurationMs > 0) {
+      showTripSummary(0, tripDurationMs, pickedUpItems, totalDistancePx);
     }
   };
 
@@ -1173,6 +1177,16 @@ export default function App() {
               <Text style={styles.tripSummaryText}>
                 {tripSummary ? `${formatMeters(tripSummary.distancePx)} · ${formatDuration(Math.round(tripSummary.durationMs / 1000))}` : ''}
               </Text>
+
+              {/* Barre XP animée */}
+              {tripSummary && (
+                <XPBar
+                  totalDistancePx={tripSummary.startDistancePx + tripSummary.distancePx}
+                  startDistancePx={tripSummary.startDistancePx}
+                  animated
+                />
+              )}
+
               {tripSummary?.pickedUpItems?.length > 0 && (
                 <View style={styles.tripSummaryPickups}>
                   <Text style={styles.tripSummaryPickupsTitle}>Vous avez trouvé :</Text>
@@ -1366,7 +1380,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
     ...THEME.shadow, shadowRadius: 12,
   },
-  // Modale fin de trajet
   tripSummaryOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.45)',
@@ -1378,11 +1391,11 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: THEME.border,
     borderRadius: THEME.radiusLg,
-    paddingHorizontal: 28,
-    paddingVertical: 28,
-    alignItems: 'center',
-    minWidth: 260,
-    maxWidth: 320,
+    paddingHorizontal: 20,
+    paddingVertical: 24,
+    alignItems: 'stretch',
+    width: '88%',
+    maxWidth: 360,
     ...THEME.shadow,
     shadowRadius: 20,
   },
@@ -1390,16 +1403,16 @@ const styles = StyleSheet.create({
     color: THEME.text,
     fontSize: 17,
     fontWeight: '800',
-    marginBottom: 8,
+    marginBottom: 4,
     textAlign: 'center',
   },
   tripSummaryText: {
     color: THEME.text,
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '600',
     textAlign: 'center',
-    marginBottom: 20,
-    opacity: 0.85,
+    marginBottom: 12,
+    opacity: 0.7,
   },
   tripSummaryPickups: {
     width: '100%',
@@ -1407,7 +1420,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 10,
-    marginBottom: 18,
+    marginBottom: 14,
     alignItems: 'flex-start',
   },
   tripSummaryPickupsTitle: {
@@ -1430,6 +1443,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 24,
     alignItems: 'center',
+    marginTop: 4,
   },
   tripSummaryBtnText: {
     color: '#fff',
