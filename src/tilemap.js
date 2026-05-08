@@ -10,7 +10,7 @@ export const TILES = {
 };
 
 export const WALKABLE = {
-  0: false,
+  0: true,   // water : traversable mais coût ×20
   1: true,
   2: true,
   3: true,
@@ -18,8 +18,8 @@ export const WALKABLE = {
   5: false,
 };
 
-export const WALK_COST   = { 1: 1.0, 2: 1.0, 3: 1.33 };
-export const SPEED_MUL_TILE = { 1: 1.0, 2: 1.0, 3: 0.75 };
+export const WALK_COST   = { 0: 20.0, 1: 1.0, 2: 1.0, 3: 1.33 };
+export const SPEED_MUL_TILE = { 0: 0.05, 1: 1.0, 2: 1.0, 3: 0.75 };
 
 export const TILE_COLORS = {
   0: '#bce0e8', // water
@@ -66,26 +66,19 @@ function buildDemoMap() {
   tiles.fill(TILES.PLAIN);
 
   const cx = MAP_W / 2, cy = MAP_H / 2;
-  // Masque d'île : falloff radial + bruit côtier → pas de bord net
   const noiseCoast = smoothedNoise(MAP_W, MAP_H, MAP_W / 6, makeRand(2222));
-  // Bruit de forêt (fond + clusters)
   const noiseFor   = smoothedNoise(MAP_W, MAP_H, MAP_W / 9, makeRand(3333));
-  // Bruit de montagne
   const noiseMtn   = smoothedNoise(MAP_W, MAP_H, MAP_W / 14, makeRand(9999));
-  // Bruit de lacs
   const noiseLake  = smoothedNoise(MAP_W, MAP_H, MAP_W / 10, makeRand(6543));
-  // Bruit de rivières
   const noiseRiv   = smoothedNoise(MAP_W, MAP_H, MAP_W / 12, makeRand(8888));
 
-  // --- Étape 1 : masque île (bords organiques, pas de rectangle) ---
+  // --- Étape 1 : masque île ---
   for (let y = 0; y < MAP_H; y++) {
     for (let x = 0; x < MAP_W; x++) {
       const ndx = (x - cx) / (MAP_W * 0.46);
       const ndy = (y - cy) / (MAP_H * 0.46);
-      // Ellipse légèrement déformée par le bruit côtier
       const dist = Math.sqrt(ndx*ndx + ndy*ndy);
       const coast = noiseCoast[y*MAP_W+x];
-      // Seuil progressif : beach à 0.85-0.95, water au-delà
       const edgeDist = dist + (coast - 0.5) * 0.18;
       if (edgeDist > 0.95) {
         tiles[y*MAP_W+x] = TILES.WATER;
@@ -95,7 +88,7 @@ function buildDemoMap() {
     }
   }
 
-  // --- Étape 2 : FOREST couvrant via bruit (dense ~55% du continent) ---
+  // --- Étape 2 : FOREST ---
   for (let y = 0; y < MAP_H; y++) {
     for (let x = 0; x < MAP_W; x++) {
       const t = tiles[y*MAP_W+x];
@@ -104,7 +97,7 @@ function buildDemoMap() {
     }
   }
 
-  // --- Étape 3 : clusters ROCK (10 massifs, rayon 3-5) ---
+  // --- Étape 3 : ROCK + VOLCANO ---
   {
     const rand = makeRand(4321);
     const MARGIN = 8;
@@ -123,7 +116,6 @@ function buildDemoMap() {
         }
       }
     }
-    // 2 volcans (rayon 2)
     for (let v = 0; v < 2; v++) {
       const qx = MARGIN + Math.floor(rand() * (MAP_W - MARGIN*2));
       const qy = MARGIN + Math.floor(rand() * (MAP_H - MARGIN*2));
@@ -148,7 +140,7 @@ function buildDemoMap() {
     }
   }
 
-  // --- Étape 5 : rivières (intérieur → bord) ---
+  // --- Étape 5 : rivières ---
   {
     const rand = makeRand(1122);
     const MARGIN = 10;
@@ -183,7 +175,7 @@ function buildDemoMap() {
     }
   }
 
-  // --- Étape 6 : majority filter ×2 (lissage des frontières) ---
+  // --- Étape 6 : majority filter ×2 ---
   const tmp = new Uint8Array(MAP_W * MAP_H);
   const counts = new Uint8Array(6);
   for (let pass = 0; pass < 2; pass++) {
@@ -288,7 +280,7 @@ export function findPath(tiles, W, H, sx, sy, tx, ty) {
       const tt=tiles[ni]; if (!WALKABLE[tt]) continue;
       if (ddx&&ddy&&(!WALKABLE[tiles[y*W+nx]]||!WALKABLE[tiles[ny*W+x]])) continue;
       const stepDist=(ddx&&ddy)?Math.SQRT2:1;
-      const ng=gCur+stepDist*(WALK_COST[tt]||1);
+      const ng=gCur+stepDist*(WALK_COST[tt]??1);
       if (ng<gScore[ni]) {
         gScore[ni]=ng; prev[ni]=idx;
         open.push([ng+octile(nx,ny,tx,ty),ni]);
@@ -309,4 +301,20 @@ function lineOfSight(a, b, tiles, W) {
     if (!WALKABLE[tiles[Math.round(a.y+dy*t)*W+Math.round(a.x+dx*t)]]) return false;
   }
   return true;
+}
+
+// Calcule la durée effective d'un chemin en tenant compte des coûts terrain.
+// path : tableau de {x, y} en coordonnées cellules.
+// Retourne la distance pondérée (en unités de cellule, équivalent coût).
+export function pathWeightedCost(path, tiles, W) {
+  if (!path || path.length < 2) return 0;
+  let total = 0;
+  for (let i = 1; i < path.length; i++) {
+    const dx = path[i].x - path[i-1].x;
+    const dy = path[i].y - path[i-1].y;
+    const stepDist = (dx !== 0 && dy !== 0) ? Math.SQRT2 : 1;
+    const tt = tiles[path[i].y * W + path[i].x];
+    total += stepDist * (WALK_COST[tt] ?? 1);
+  }
+  return total;
 }
