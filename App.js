@@ -45,6 +45,7 @@ const RECENTER_HIDE_RADIUS = 90;
 import { TILES_DATA, MAP_W, MAP_H, TILE_PX, WALKABLE, findPath } from './src/tilemap';
 import { sampleAt } from './src/smoothing';
 import TileLayer, { MAP_W_PX, MAP_H_PX } from './components/TileLayer';
+import VegetationLayer from './components/VegetationLayer';
 import DottedTrail from './components/DottedTrail';
 import XPBar from './components/XPBar';
 
@@ -194,7 +195,6 @@ export default function App() {
   const [followedPlayers, setFollowedPlayers] = useState(new Set());
   const [playersListOpen, setPlayersListOpen] = useState(false);
 
-  // Persiste les joueurs suivis
   useEffect(() => {
     (async () => {
       try {
@@ -325,7 +325,6 @@ export default function App() {
           x: animX.__getValue(), y: animY.__getValue(),
         });
         if (!alive) return;
-        // À la connexion, on restaure totalDistancePx depuis Firebase uniquement.
         if (result && typeof result.totalDistancePx === 'number' && result.totalDistancePx > 0) {
           setTotalDistancePx(result.totalDistancePx);
           AsyncStorage.setItem(TOTAL_DISTANCE_KEY, result.totalDistancePx.toString()).catch(() => {});
@@ -1066,7 +1065,6 @@ export default function App() {
     return { dist: Math.round(length), durSec: Math.round(durMs / 1000) };
   })() : null;
 
-  // --- Modale liste des joueurs ---
   const renderPlayersListModal = () => (
     <Modal
       visible={playersListOpen}
@@ -1141,6 +1139,7 @@ export default function App() {
                   <TouchableWithoutFeedback onPress={handleTap}>
                     <View style={StyleSheet.absoluteFill}>
                       <TileLayer />
+                      <VegetationLayer />
                       {pendingTarget && (
                         <DottedTrail samples={pendingTarget.samples} color="#3a7ea8" spacing={26} size={6} opacity={0.95} />
                       )}
@@ -1235,13 +1234,7 @@ export default function App() {
 
         {moving && <TravelingBar eta={eta} onStop={stopMove} />}
 
-        {/* Modale fin de trajet */}
-        <Modal
-          visible={!!tripSummary}
-          transparent
-          animationType="fade"
-          onRequestClose={dismissTripSummary}
-        >
+        <Modal visible={!!tripSummary} transparent animationType="fade" onRequestClose={dismissTripSummary}>
           <View style={styles.tripSummaryOverlay}>
             <View style={styles.tripSummaryModal}>
               <Text style={styles.tripSummaryTitle}>🏁 Trajet terminé</Text>
@@ -1272,7 +1265,6 @@ export default function App() {
           </View>
         </Modal>
 
-        {/* Modale liste des joueurs */}
         {renderPlayersListModal()}
 
         {showRecenterBtn && (
@@ -1290,7 +1282,6 @@ export default function App() {
           </TouchableOpacity>
         )}
 
-        {/* Flèches uniquement pour les joueurs suivis */}
         {viewport.w > 0 && otherPlayers
           .filter((p) => followedPlayers.has(p.id))
           .map((p) => {
@@ -1304,13 +1295,8 @@ export default function App() {
           })
         }
 
-        {/* Badge en ligne — cliquable pour ouvrir la liste */}
         {profile && (
-          <TouchableOpacity
-            style={styles.onlineBadge}
-            onPress={() => setPlayersListOpen(true)}
-            activeOpacity={0.8}
-          >
+          <TouchableOpacity style={styles.onlineBadge} onPress={() => setPlayersListOpen(true)} activeOpacity={0.8}>
             <View style={[styles.onlineDot, { backgroundColor: profile.color }]} />
             <Text style={styles.onlineText}>
               {profile.name} · {otherPlayers.filter(isOnline).length} en ligne
@@ -1497,7 +1483,6 @@ const styles = StyleSheet.create({
     alignItems: 'center', marginTop: 4,
   },
   tripSummaryBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
-  // --- Modale joueurs ---
   playersModalOverlay: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.45)',
     justifyContent: 'flex-start', alignItems: 'flex-start',
