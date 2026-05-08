@@ -1,23 +1,37 @@
 // Calculs de mouvement purs (testables, indépendants de React).
 import { SPEED_PX_PER_SEC, MIN_DURATION_MS, MAX_DURATION_MS } from './constants';
-import { TILE_PX } from './tilemap';
+import { TILES_DATA, MAP_W, TILE_PX, WALK_COST } from './tilemap';
 
-// Calcule la durée d'un déplacement pour un chemin donné en tenant compte des coûts terrain.
-// weightedCost : résultat de pathWeightedCost (distance pondérée en cellules)
-// Si weightedCost absent, fallback sur distance euclidienne (comportement legacy).
-//   speedMul ∈ [1..30] divise la durée (mode debug).
-export function movementDuration(from, to, speedMul = 1, weightedCost = null) {
-  const dist = Math.hypot(to.x - from.x, to.y - from.y);
-  let effectiveDist;
-  if (weightedCost !== null && weightedCost > 0) {
-    // Convertit le coût pondéré (en cellules) en pixels équivalents
-    const rawCells = dist / TILE_PX;
-    const costRatio = weightedCost / rawCells;
-    effectiveDist = dist * costRatio;
-  } else {
-    effectiveDist = dist;
+// Calcule la durée d'un déplacement le long d'un tableau de points (px)
+// en tenant compte du coût terrain de chaque segment.
+// samples : [{x, y}] en pixels
+export function movementDurationAlongPath(samples) {
+  if (!samples || samples.length < 2) return { dist: 0, durationMs: MIN_DURATION_MS, baseDurationMs: MIN_DURATION_MS };
+  let dist = 0;
+  let weightedDist = 0;
+  for (let i = 1; i < samples.length; i++) {
+    const dx = samples[i].x - samples[i-1].x;
+    const dy = samples[i].y - samples[i-1].y;
+    const segLen = Math.hypot(dx, dy);
+    dist += segLen;
+    // Coût du terrain à mi-segment
+    const mx = (samples[i].x + samples[i-1].x) / 2;
+    const my = (samples[i].y + samples[i-1].y) / 2;
+    const tx = Math.floor(mx / TILE_PX);
+    const ty = Math.floor(my / TILE_PX);
+    const tileType = TILES_DATA[ty * MAP_W + tx];
+    const cost = WALK_COST[tileType] ?? 1;
+    weightedDist += segLen * cost;
   }
-  let dur = (effectiveDist / SPEED_PX_PER_SEC) * 1000;
+  let dur = (weightedDist / SPEED_PX_PER_SEC) * 1000;
+  dur = Math.max(MIN_DURATION_MS, Math.min(MAX_DURATION_MS, dur));
+  return { dist, durationMs: dur, baseDurationMs: dur };
+}
+
+// Fallback legacy (distance euclidienne simple, sans terrain)
+export function movementDuration(from, to, speedMul = 1) {
+  const dist = Math.hypot(to.x - from.x, to.y - from.y);
+  let dur = (dist / SPEED_PX_PER_SEC) * 1000;
   dur = Math.max(MIN_DURATION_MS, Math.min(MAX_DURATION_MS, dur));
   return { dist, durationMs: dur / Math.max(1, speedMul), baseDurationMs: dur };
 }
