@@ -2,7 +2,7 @@
 // Logique pure dans /src, composants UI dans /components.
 // App.js orchestre uniquement : état React, gestes, animations natives.
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   StyleSheet, View, Text, Dimensions, Animated, Easing,
   TouchableWithoutFeedback, TouchableOpacity, Modal, ScrollView,
@@ -47,8 +47,12 @@ import { sampleAt } from './src/smoothing';
 import TileLayer, { MAP_W_PX, MAP_H_PX } from './components/TileLayer';
 import DottedTrail from './components/DottedTrail';
 import XPBar from './components/XPBar';
+import FogOfWar from './components/FogOfWar';
 
 const WATER_COLOR = '#bce0e8';
+
+// ─── Fog of War : rayon de visibilité en pixels carte (≈ 3 tiles) ───────────
+const FOG_REVEAL_RADIUS_PX = TILE_PX * 3.5;
 
 function safePixelPos(px, py) {
   const tx = Math.floor(px / TILE_PX);
@@ -114,6 +118,18 @@ const INIT_X = SCREEN_W / 2 - MAP_SIZE / 2;
 const INIT_Y = SCREEN_H / 2 - MAP_SIZE / 2;
 
 const PAN_THRESHOLD_PX = 5;
+
+// ─── Convertit une position pixel carte en coordonnée écran ────────────────
+// offsetX/Y = translation de la carte (totalX/Y), scale = zoom actuel
+// cx/cy = demi-largeur de la vue carte (MAP_W_PX/2)
+function mapToScreen(mapX, mapY, offsetX, offsetY, scale) {
+  const cx = MAP_W_PX / 2;
+  const cy = MAP_H_PX / 2;
+  return {
+    x: offsetX + scale * mapX + cx * (1 - scale),
+    y: offsetY + scale * mapY + cy * (1 - scale),
+  };
+}
 
 export default function App() {
   const [viewport, setViewport] = useState({ w: SCREEN_W, h: SCREEN_H });
@@ -193,6 +209,76 @@ export default function App() {
   // --- Suivi de joueurs ---
   const [followedPlayers, setFollowedPlayers] = useState(new Set());
   const [playersListOpen, setPlayersListOpen] = useState(false);
+
+  // ─── Fog of War state ───────────────────────────────────────────────────
+  // Set de clés "x,y" (coords pixel arrondies à la tile) mémorisant les zones découvertes
+  const [discoveredTiles, setDiscoveredTiles] = useState(() => new Set());
+  // Position écran du joueur pour le cercle de visibilité
+  const [playerScreenPos, setPlayerScreenPos] = useState(null);
+  // Positions écran des zones mémorisées (tableau de {x, y})
+  const [discoveredScreenPositions, setDiscoveredScreenPositions] = useState([]);
+  // Ref pour accéder aux valeurs Animated sans listener
+  const totalXRef = useRef(INIT_X);
+  const totalYRef = useRef(INIT_Y);
+
+  // Met à jour les tiles découvertes quand le joueur bouge
+  const updateDiscoveredTiles = useCallback((px, py) => {
+    const key = `${Math.round(px / TILE_PX)},${Math.round(py / TILE_PX)}`;
+    setDiscoveredTiles((prev) => {
+      if (prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+  }, []);
+
+  // Recalcule les positions écran du fog (joueur + zones découvertes)
+  const updateFogScreenPositions = useCallback(() => {
+    const offX = totalXRef.current;
+    const offY = totalYRef.current;
+    const scale = lastScale.current;
+
+    const playerMapX = animX.__getValue();
+    const playerMapY = animY.__getValue();
+    const playerScreen = mapToScreen(playerMapX, playerMapY, offX, offY, scale);
+    setPlayerScreenPos(playerScreen);
+
+    setDiscoveredTiles((tiles) => {
+      const positions = [];
+      for (const k of tiles) {
+        const [tx2, ty2] = k.split(',').map(Number);
+        const mapX = tx2 * TILE_PX + TILE_PX / 2;
+        const mapY = ty2 * TILE_PX + TILE_PX / 2;
+        const screen = mapToScreen(mapX, mapY, offX, offY, scale);
+        positions.push({ x: screen.x, y: screen.y, r: FOG_REVEAL_RADIUS_PX * scale });
+      }
+      setDiscoveredScreenPositions(positions);
+      return tiles;
+    });
+  }, []);
+
+  // Abonne les Animated values pour mettre à jour le fog lors du pan/zoom
+  useEffect(() => {
+    const idX = tx.addListener(({ value }) => { totalXRef.current = value + dx.__getValue(); updateFogScreenPositions(); });
+    const idY = ty.addListener(({ value }) => { totalYRef.current = value + dy.__getValue(); updateFogScreenPositions(); });
+    const idDX = dx.addListener(({ value }) => { totalXRef.current = tx.__getValue() + value; updateFogScreenPositions(); });
+    const idDY = dy.addListener(({ value }) => { totalYRef.current = ty.__getValue() + value; updateFogScreenPositions(); });
+    const idScale = baseScale.addListener(() => { updateFogScreenPositions(); });
+    return () => {
+      tx.removeListener(idX);
+      ty.removeListener(idY);
+      dx.removeListener(idDX);
+      dy.removeListener(idDY);
+      baseScale.removeListener(idScale);
+    };
+  }, [updateFogScreenPositions]);
+
+  // Met à jour la tile découverte et la position écran quand pos change
+  useEffect(() => {
+    updateDiscoveredTiles(pos.x, pos.y);
+    updateFogScreenPositions();
+  }, [pos]);
+  // ────────────────────────────────────────────────────────────────────────
 
   // Persiste les joueurs suivis
   useEffect(() => {
@@ -816,6 +902,8 @@ export default function App() {
       const p = sampleAt(samples, value);
       animX.setValue(p.x);
       animY.setValue(p.y);
+      // Mettre à jour les tiles découvertes pendant le mouvement
+      updateDiscoveredTiles(p.x, p.y);
       if (value - lastConsumedTick.current >= DOT_TICK) {
         lastConsumedTick.current = value;
         setConsumedDist(value);
@@ -1228,6 +1316,20 @@ export default function App() {
                     </View>
                   </TouchableWithoutFeedback>
                 </Animated.View>
+
+                {/* ══════════════════════════════════════════════
+                    FOG OF WAR — overlay écran (hors map scalée)
+                    Se place après le Animated.View de la carte
+                    pour être au-dessus, en coords écran fixes.
+                ═══════════════════════════════════════════════ */}
+                <FogOfWar
+                  playerScreenPos={playerScreenPos}
+                  screenWidth={viewport.w || SCREEN_W}
+                  screenHeight={viewport.h || SCREEN_H}
+                  visibilityRadius={FOG_REVEAL_RADIUS_PX * lastScale.current}
+                  discoveredCircles={discoveredScreenPositions}
+                />
+
               </Animated.View>
             </PanGestureHandler>
           </Animated.View>
