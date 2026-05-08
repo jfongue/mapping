@@ -45,7 +45,7 @@ export const BIOMES = {
 };
 
 // Seed dédiée biomes — indépendante du terrain et des POI
-export const BIOME_SEED = 0xB10ME5;
+export const BIOME_SEED = 0xB10E50;
 
 // Seuils de la noise pour assigner un biome (valeur ∈ [0,1))
 // Modifie ces valeurs pour ajuster la répartition sur la map
@@ -73,18 +73,18 @@ export function getBiomeAt(cellX, cellY) {
 
 // Z-offsets par type d'élément — utilisés par le painter's sort
 export const Z_OFFSET = {
-  ground:   0,
-  bush:    -8,
-  flower:  -8,
-  shrub:  -12,
-  reed:   -12,
-  lily:   -12,
-  cactus: -18,
-  fern:   -18,
-  building: -20,
-  deadwood: -22,
-  vine:   -28,
-  tree:   -35,
-  palm:   -35,
-  mountain: -60,
+  ground:    0,
+  bush:     -8,
+  flower:   -8,
+  shrub:   -12,
+  reed:    -12,
+  lily:    -12,
+  cactus:  -18,
+  fern:    -18,
+  building:-20,
+  deadwood:-22,
+  vine:    -28,
+  tree:    -35,
+  palm:    -35,
+  mountain:-60,
 };
