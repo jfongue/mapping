@@ -5,7 +5,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   StyleSheet, View, Text, Dimensions, Animated, Easing,
-  TouchableWithoutFeedback, TouchableOpacity, Modal, ScrollView,
+  TouchableWithoutFeedback, TouchableOpacity, Modal,
 } from 'react-native';
 import {
   GestureHandlerRootView, PanGestureHandler, PinchGestureHandler, State,
@@ -25,22 +25,18 @@ import {
   TOP_SAFE, SAVE_KEY, PROFILE_KEY,
   PLAYER_COLORS,
   SPEED_PX_PER_SEC, MIN_DURATION_MS, MAX_DURATION_MS,
+  INVENTORY_KEY, FOLLOWED_PLAYERS_KEY, TOTAL_DISTANCE_KEY,
+  LETTER_PICKUP_RADIUS, PLAYER_NEAR_RADIUS, RECENTER_HIDE_RADIUS,
+  LETTER_READABLE_RADIUS, LETTER_SNAP_RADIUS,
+  PAN_THRESHOLD_PX,
 } from './src/constants';
 import { THEME } from './src/theme';
 
-// --- Notifications ---
 import {
   requestNotificationPermissions,
   scheduleArrivalNotification,
   cancelArrivalNotification,
 } from './src/notifications';
-
-const INVENTORY_KEY = '@treasureProto.inventory.v1';
-const FOLLOWED_PLAYERS_KEY = '@treasureProto.followedPlayers.v1';
-const TOTAL_DISTANCE_KEY = 'TOTAL_DISTANCE_KEY';
-const LETTER_PICKUP_RADIUS = 130;
-const PLAYER_NEAR_RADIUS = 130;
-const RECENTER_HIDE_RADIUS = 90;
 
 import { TILES_DATA, MAP_W, MAP_H, TILE_PX, WALKABLE, findPath } from './src/tilemap';
 import { sampleAt } from './src/smoothing';
@@ -94,7 +90,7 @@ function buildStraightPath(cellPath, startPx) {
 const MAP_SIZE = MAP_W_PX;
 const SPAWN = { x: (MAP_W / 2) * TILE_PX, y: (MAP_H / 2) * TILE_PX };
 import { formatMeters, formatDuration } from './src/format';
-import { movementDuration, lerpFromTarget, remainingDurationAt } from './src/movement';
+import { lerpFromTarget, remainingDurationAt } from './src/movement';
 import { generateProfile, isPlayerOnline } from './src/profile';
 
 import SleepyZzz from './components/SleepyZzz';
@@ -104,16 +100,15 @@ import PlayerDetailModal from './components/PlayerDetailModal';
 import LetterWriteModal from './components/LetterWriteModal';
 import LetterReadModal from './components/LetterReadModal';
 import InventoryModal from './components/InventoryModal';
+import OnlinePlayersModal from './components/OnlinePlayersModal';
 import { ConfirmationBar, TravelingBar } from './components/TravelBars';
 import { AdventurerSprite } from './components/Adventurer';
-import { ScrollText, Settings, Crosshair, Backpack, Heart } from 'lucide-react-native';
+import { ScrollText, Settings, Crosshair, Backpack } from 'lucide-react-native';
 import { DEBUG_MESSAGES, DEBUG_MESSAGE_AUTHORS } from './src/debugMessages';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 const INIT_X = SCREEN_W / 2 - MAP_SIZE / 2;
 const INIT_Y = SCREEN_H / 2 - MAP_SIZE / 2;
-
-const PAN_THRESHOLD_PX = 5;
 
 export default function App() {
   const [viewport, setViewport] = useState({ w: SCREEN_W, h: SCREEN_H });
@@ -190,11 +185,10 @@ export default function App() {
 
   const pinchListenerId = useRef(null);
 
-  // --- Suivi de joueurs ---
   const [followedPlayers, setFollowedPlayers] = useState(new Set());
   const [playersListOpen, setPlayersListOpen] = useState(false);
 
-  // Persiste les joueurs suivis
+  // --- Persist followed players ---
   useEffect(() => {
     (async () => {
       try {
@@ -207,7 +201,8 @@ export default function App() {
     })();
   }, []);
 
-  const toggleFollow = (playerId) => {
+  const toggleFollow = (playerOrId) => {
+    const playerId = typeof playerOrId === 'string' ? playerOrId : playerOrId.id;
     setFollowedPlayers((prev) => {
       const next = new Set(prev);
       if (next.has(playerId)) {
@@ -219,6 +214,8 @@ export default function App() {
       return next;
     });
   };
+
+  const isFollowed = (id) => followedPlayers.has(id);
 
   const computeCenteredOffset = (charX, charY, vw, vh, s) => {
     const cx = MAP_W_PX / 2;
@@ -325,7 +322,6 @@ export default function App() {
           x: animX.__getValue(), y: animY.__getValue(),
         });
         if (!alive) return;
-        // À la connexion, on restaure totalDistancePx depuis Firebase uniquement.
         if (result && typeof result.totalDistancePx === 'number' && result.totalDistancePx > 0) {
           setTotalDistancePx(result.totalDistancePx);
           AsyncStorage.setItem(TOTAL_DISTANCE_KEY, result.totalDistancePx.toString()).catch(() => {});
@@ -699,7 +695,7 @@ export default function App() {
       if (d > 30) setPendingTarget(null);
       return;
     }
-    const nearLetter = findLetterNearPoint(t.x, t.y, 40);
+    const nearLetter = findLetterNearPoint(t.x, t.y, LETTER_SNAP_RADIUS);
     let goalX = t.x, goalY = t.y;
     if (nearLetter) { goalX = nearLetter.x; goalY = nearLetter.y; }
     const sx = Math.floor(pos.x / TILE_PX);
@@ -857,7 +853,6 @@ export default function App() {
 
     const pickup = pendingPickupRef.current;
     pendingPickupRef.current = null;
-
     const pickedUpItems = [];
 
     if (pickup && pickup.id) {
@@ -893,38 +888,6 @@ export default function App() {
     } else if (tripDurationMs > 0) {
       showTripSummary(0, tripDurationMs, pickedUpItems, totalDistancePx);
     }
-  };
-
-  const startMove = (t) => {
-    const { baseDurationMs } = movementDuration(pos, t, 1);
-    moveTarget.current = t;
-    moveBaseDuration.current = baseDurationMs;
-    setMoving(true);
-    const dur = baseDurationMs / speedMul;
-    announceMove({ from: { x: pos.x, y: pos.y }, to: t, startTs: Date.now(), durationMs: dur });
-    runMoveAnim(dur);
-  };
-
-  const runMoveAnim = (duration) => {
-    const t = moveTarget.current;
-    if (!t) return;
-    setEta(Date.now() + duration);
-    const anim = Animated.parallel([
-      Animated.timing(animX, { toValue: t.x, duration, easing: Easing.linear, useNativeDriver: true }),
-      Animated.timing(animY, { toValue: t.y, duration, easing: Easing.linear, useNativeDriver: true }),
-    ]);
-    currentAnim.current = anim;
-    anim.start(({ finished }) => {
-      if (finished) {
-        setPos(t);
-        clearMyMove(t.x, t.y);
-        setMoving(false);
-        setEta(null);
-        setTarget(null);
-        currentAnim.current = null;
-        moveTarget.current = null;
-      }
-    });
   };
 
   const recenter = () => {
@@ -1066,66 +1029,6 @@ export default function App() {
     return { dist: Math.round(length), durSec: Math.round(durMs / 1000) };
   })() : null;
 
-  // --- Modale liste des joueurs ---
-  const renderPlayersListModal = () => (
-    <Modal
-      visible={playersListOpen}
-      transparent
-      animationType="fade"
-      onRequestClose={() => setPlayersListOpen(false)}
-    >
-      <TouchableWithoutFeedback onPress={() => setPlayersListOpen(false)}>
-        <View style={styles.playersModalOverlay}>
-          <TouchableWithoutFeedback onPress={() => {}}>
-            <View style={styles.playersModalCard}>
-              <Text style={styles.playersModalTitle}>
-                👥 Joueurs en ligne ({otherPlayers.filter(isOnline).length})
-              </Text>
-              {otherPlayers.length === 0 ? (
-                <Text style={styles.playersModalEmpty}>Aucun autre joueur connecté</Text>
-              ) : (
-                <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
-                  {otherPlayers.map((p) => {
-                    const online = isOnline(p);
-                    const followed = followedPlayers.has(p.id);
-                    return (
-                      <View key={p.id} style={styles.playerRow}>
-                        <View style={[styles.playerRowDot, { backgroundColor: p.color || '#888' }]} />
-                        <Text style={[styles.playerRowName, !online && styles.playerRowNameOffline]}>
-                          {p.name || 'Anonyme'}
-                        </Text>
-                        {!online && <Text style={styles.playerRowStatus}>💤</Text>}
-                        <TouchableOpacity
-                          style={[styles.heartBtn, followed && styles.heartBtnActive]}
-                          onPress={() => toggleFollow(p.id)}
-                          activeOpacity={0.7}
-                        >
-                          <Heart
-                            size={18}
-                            color={followed ? '#ff4d6d' : THEME.text}
-                            fill={followed ? '#ff4d6d' : 'none'}
-                            strokeWidth={2}
-                          />
-                        </TouchableOpacity>
-                      </View>
-                    );
-                  })}
-                </ScrollView>
-              )}
-              <TouchableOpacity
-                style={styles.playersModalCloseBtn}
-                onPress={() => setPlayersListOpen(false)}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.playersModalCloseBtnText}>Fermer</Text>
-              </TouchableOpacity>
-            </View>
-          </TouchableWithoutFeedback>
-        </View>
-      </TouchableWithoutFeedback>
-    </Modal>
-  );
-
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <StatusBar style="light" />
@@ -1150,7 +1053,7 @@ export default function App() {
                       {letters.map((l) => {
                         const isMine = profile && l.authorId === profile.id;
                         const distToMe = Math.hypot(l.x - pos.x, l.y - pos.y);
-                        const readable = !isMine && distToMe <= 80;
+                        const readable = !isMine && distToMe <= LETTER_READABLE_RADIUS;
                         const iconColor = isMine ? '#666' : (readable ? (l.authorColor || '#8b4513') : '#888');
                         return (
                           <View key={l.id} pointerEvents="none" style={{ position: 'absolute', left: l.x - 16, top: l.y - 16 }}>
@@ -1179,7 +1082,7 @@ export default function App() {
                       {otherPlayers.map((p) => {
                         const e = playerAnims.get(p.id);
                         if (!e) return null;
-                        const isMoving = !!p.target;
+                        const isMovingP = !!p.target;
                         const online = isOnline(p);
                         return (
                           <View key={p.id} style={StyleSheet.absoluteFill} pointerEvents="none">
@@ -1188,18 +1091,18 @@ export default function App() {
                               transform: [
                                 { translateX: Animated.subtract(e.x, 25) },
                                 { translateY: Animated.subtract(e.y, 25) },
-                                ...(isMoving ? [
+                                ...(isMovingP ? [
                                   { translateY: Animated.multiply(bounce, -6) },
                                   { scaleX: bounce.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) },
                                   { scaleY: bounce.interpolate({ inputRange: [0, 1], outputRange: [1, 0.94] }) },
                                 ] : []),
-                                ...(!online && !isMoving ? [
+                                ...(!online && !isMovingP ? [
                                   { scaleX: breathe.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1.04] }) },
                                   { scaleY: breathe.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1.04] }) },
                                 ] : []),
                               ],
                             }}>
-                              <AdventurerSprite size={50} viewBoxScale={1.2} dir="down" moving={isMoving}
+                              <AdventurerSprite size={50} viewBoxScale={1.2} dir="down" moving={isMovingP}
                                 outfit={p.outfit||'gray'} skin={p.skin||'light'} hair={p.hair||'brown'} hat={p.hat||'none'} />
                             </Animated.View>
                             {!online && <SleepyZzz x={e.x} y={e.y} />}
@@ -1272,8 +1175,15 @@ export default function App() {
           </View>
         </Modal>
 
-        {/* Modale liste des joueurs */}
-        {renderPlayersListModal()}
+        {/* Modale joueurs en ligne — composant dédié */}
+        <OnlinePlayersModal
+          visible={playersListOpen}
+          onClose={() => setPlayersListOpen(false)}
+          players={otherPlayers}
+          myPos={pos}
+          isFollowed={isFollowed}
+          onToggleFollow={toggleFollow}
+        />
 
         {showRecenterBtn && (
           <TouchableOpacity style={styles.recenterBtn} onPress={recenter} activeOpacity={0.75}>
@@ -1290,7 +1200,7 @@ export default function App() {
           </TouchableOpacity>
         )}
 
-        {/* Flèches uniquement pour les joueurs suivis */}
+        {/* Flèches pour les joueurs suivis */}
         {viewport.w > 0 && otherPlayers
           .filter((p) => followedPlayers.has(p.id))
           .map((p) => {
@@ -1304,7 +1214,7 @@ export default function App() {
           })
         }
 
-        {/* Badge en ligne — cliquable pour ouvrir la liste */}
+        {/* Badge en ligne */}
         {profile && (
           <TouchableOpacity
             style={styles.onlineBadge}
@@ -1377,14 +1287,6 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: WATER_COLOR, overflow: 'hidden' },
   canvas: { flex: 1 },
   map: { position: 'absolute', backgroundColor: WATER_COLOR },
-  player: {
-    position: 'absolute', width: 28, height: 28, borderRadius: 14,
-    backgroundColor: '#ff6b6b', borderWidth: 3, borderColor: '#fff',
-  },
-  otherPlayer: {
-    position: 'absolute', width: 24, height: 24, borderRadius: 12,
-    borderWidth: 2, borderColor: '#fff', opacity: 0.95,
-  },
   otherPlayerLabel: {
     position: 'absolute', left: 0, top: 0, width: 120,
     textAlign: 'center', color: '#fff', fontSize: 11, fontWeight: '600',
@@ -1403,12 +1305,6 @@ const styles = StyleSheet.create({
   previewTargetInner: {
     position: 'absolute', width: 12, height: 12, borderRadius: 6, backgroundColor: '#ffd93d',
   },
-  hud: { position: 'absolute', top: 60, left: 0, right: 0, alignItems: 'center' },
-  hudText: {
-    color: '#fff', backgroundColor: 'rgba(0,0,0,0.6)',
-    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
-    fontSize: 13, fontWeight: '600',
-  },
   recenterBtn: {
     position: 'absolute', bottom: 156, right: 16,
     width: 48, height: 48, borderRadius: 24,
@@ -1416,7 +1312,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
     ...THEME.shadow, shadowRadius: 12,
   },
-  iconText: { color: THEME.text, fontSize: 22, fontWeight: '700' },
   speedBtn: {
     position: 'absolute', bottom: 160, left: 16,
     paddingHorizontal: 16, paddingVertical: 10, borderRadius: 22,
@@ -1433,7 +1328,6 @@ const styles = StyleSheet.create({
   },
   onlineDot: { width: 9, height: 9, borderRadius: 4.5, marginRight: 7, borderWidth: 1, borderColor: THEME.border },
   onlineText: { color: THEME.text, fontSize: 12, fontWeight: '700' },
-  recenterBtnText: { color: THEME.text, fontSize: 22 },
   settingsBtn: {
     position: 'absolute', top: TOP_SAFE, right: 16,
     width: 48, height: 48, borderRadius: 24,
@@ -1497,49 +1391,4 @@ const styles = StyleSheet.create({
     alignItems: 'center', marginTop: 4,
   },
   tripSummaryBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
-  // --- Modale joueurs ---
-  playersModalOverlay: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'flex-start', alignItems: 'flex-start',
-    paddingTop: TOP_SAFE + 48, paddingLeft: 16,
-  },
-  playersModalCard: {
-    backgroundColor: THEME.card, borderWidth: 1.5, borderColor: THEME.border,
-    borderRadius: THEME.radiusLg, paddingHorizontal: 16, paddingVertical: 16,
-    width: 280, maxWidth: '90%',
-    ...THEME.shadow, shadowRadius: 16,
-  },
-  playersModalTitle: {
-    color: THEME.text, fontSize: 15, fontWeight: '800',
-    marginBottom: 12, textAlign: 'center',
-  },
-  playersModalEmpty: {
-    color: THEME.text, fontSize: 13, opacity: 0.6,
-    textAlign: 'center', marginBottom: 12,
-  },
-  playerRow: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: THEME.border,
-  },
-  playerRowDot: {
-    width: 10, height: 10, borderRadius: 5, marginRight: 8,
-  },
-  playerRowName: {
-    flex: 1, color: THEME.text, fontSize: 13, fontWeight: '600',
-  },
-  playerRowNameOffline: { opacity: 0.5 },
-  playerRowStatus: { fontSize: 14, marginRight: 6 },
-  heartBtn: {
-    width: 36, height: 36, borderRadius: 18,
-    justifyContent: 'center', alignItems: 'center',
-    backgroundColor: 'transparent',
-  },
-  heartBtnActive: {
-    backgroundColor: 'rgba(255,77,109,0.12)',
-  },
-  playersModalCloseBtn: {
-    marginTop: 12, backgroundColor: THEME.accent || '#3a7ea8',
-    paddingVertical: 10, borderRadius: 20, alignItems: 'center',
-  },
-  playersModalCloseBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
 });
