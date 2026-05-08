@@ -1,4 +1,5 @@
 // Système de tiles : map 128×128 procédurale + pathfinding A*.
+import { getBiomeAt, BIOMES } from './biomes';
 
 export const TILES = {
   WATER: 0,
@@ -21,6 +22,7 @@ export const WALKABLE = {
 export const WALK_COST   = { 1: 1.0, 2: 1.0, 3: 1.33 };
 export const SPEED_MUL_TILE = { 1: 1.0, 2: 1.0, 3: 0.75 };
 
+// Couleurs de base (fallback si biome non applicable)
 export const TILE_COLORS = {
   0: '#bce0e8', // water
   1: '#faead0', // beach
@@ -29,6 +31,25 @@ export const TILE_COLORS = {
   4: '#bcb6b0', // rock
   5: '#8a7a7e', // volcano
 };
+
+// Retourne la couleur d'une tile en tenant compte du biome.
+// Les tiles non-passables (eau, roc, volcan) gardent leur couleur fixe.
+// Les tiles passables (plaine, forêt, plage) prennent la couleur base du biome.
+export function getTileColor(tileType, cellX, cellY) {
+  if (tileType === TILES.WATER)   return TILE_COLORS[0];
+  if (tileType === TILES.ROCK)    return TILE_COLORS[4];
+  if (tileType === TILES.VOLCANO) return TILE_COLORS[5];
+  // Tiles passables : colorées par biome
+  const biome = getBiomeAt(cellX, cellY);
+  return BIOMES[biome].ground.base;
+}
+
+// Retourne le nom du biome pour une tile passable (utile pour VegetationLayer).
+// Renvoie null pour les tiles non-passables.
+export function getTileBiome(tileType, cellX, cellY) {
+  if (!WALKABLE[tileType]) return null;
+  return getBiomeAt(cellX, cellY);
+}
 
 export const TILE_PX = 50;
 export const MAP_W   = 128;
@@ -66,26 +87,19 @@ function buildDemoMap() {
   tiles.fill(TILES.PLAIN);
 
   const cx = MAP_W / 2, cy = MAP_H / 2;
-  // Masque d'île : falloff radial + bruit côtier → pas de bord net
   const noiseCoast = smoothedNoise(MAP_W, MAP_H, MAP_W / 6, makeRand(2222));
-  // Bruit de forêt (fond + clusters)
   const noiseFor   = smoothedNoise(MAP_W, MAP_H, MAP_W / 9, makeRand(3333));
-  // Bruit de montagne
   const noiseMtn   = smoothedNoise(MAP_W, MAP_H, MAP_W / 14, makeRand(9999));
-  // Bruit de lacs
   const noiseLake  = smoothedNoise(MAP_W, MAP_H, MAP_W / 10, makeRand(6543));
-  // Bruit de rivières
   const noiseRiv   = smoothedNoise(MAP_W, MAP_H, MAP_W / 12, makeRand(8888));
 
-  // --- Étape 1 : masque île (bords organiques, pas de rectangle) ---
+  // --- Étape 1 : masque île ---
   for (let y = 0; y < MAP_H; y++) {
     for (let x = 0; x < MAP_W; x++) {
       const ndx = (x - cx) / (MAP_W * 0.46);
       const ndy = (y - cy) / (MAP_H * 0.46);
-      // Ellipse légèrement déformée par le bruit côtier
       const dist = Math.sqrt(ndx*ndx + ndy*ndy);
       const coast = noiseCoast[y*MAP_W+x];
-      // Seuil progressif : beach à 0.85-0.95, water au-delà
       const edgeDist = dist + (coast - 0.5) * 0.18;
       if (edgeDist > 0.95) {
         tiles[y*MAP_W+x] = TILES.WATER;
@@ -95,7 +109,7 @@ function buildDemoMap() {
     }
   }
 
-  // --- Étape 2 : FOREST couvrant via bruit (dense ~55% du continent) ---
+  // --- Étape 2 : FOREST ---
   for (let y = 0; y < MAP_H; y++) {
     for (let x = 0; x < MAP_W; x++) {
       const t = tiles[y*MAP_W+x];
@@ -104,7 +118,7 @@ function buildDemoMap() {
     }
   }
 
-  // --- Étape 3 : clusters ROCK (10 massifs, rayon 3-5) ---
+  // --- Étape 3 : clusters ROCK ---
   {
     const rand = makeRand(4321);
     const MARGIN = 8;
@@ -123,7 +137,6 @@ function buildDemoMap() {
         }
       }
     }
-    // 2 volcans (rayon 2)
     for (let v = 0; v < 2; v++) {
       const qx = MARGIN + Math.floor(rand() * (MAP_W - MARGIN*2));
       const qy = MARGIN + Math.floor(rand() * (MAP_H - MARGIN*2));
@@ -137,7 +150,7 @@ function buildDemoMap() {
     }
   }
 
-  // --- Étape 4 : lacs intérieurs ---
+  // --- Étape 4 : lacs ---
   {
     const LMARGIN = 12;
     for (let y = LMARGIN; y < MAP_H-LMARGIN; y++) {
@@ -148,7 +161,7 @@ function buildDemoMap() {
     }
   }
 
-  // --- Étape 5 : rivières (intérieur → bord) ---
+  // --- Étape 5 : rivières ---
   {
     const rand = makeRand(1122);
     const MARGIN = 10;
@@ -183,7 +196,7 @@ function buildDemoMap() {
     }
   }
 
-  // --- Étape 6 : majority filter ×2 (lissage des frontières) ---
+  // --- Étape 6 : majority filter ×2 ---
   const tmp = new Uint8Array(MAP_W * MAP_H);
   const counts = new Uint8Array(6);
   for (let pass = 0; pass < 2; pass++) {
