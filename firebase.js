@@ -11,15 +11,7 @@ import {
   onValue, onDisconnect, serverTimestamp,
 } from 'firebase/database';
 
-const firebaseConfig = {
-  apiKey: 'AIzaSyC63kxXSMBKycCMedL4mGl3rB6atk4TstE',
-  authDomain: 'treasure-quest-proto.firebaseapp.com',
-  databaseURL: 'https://treasure-quest-proto-default-rtdb.europe-west1.firebasedatabase.app',
-  projectId: 'treasure-quest-proto',
-  storageBucket: 'treasure-quest-proto.firebasestorage.app',
-  messagingSenderId: '176526916404',
-  appId: '1:176526916404:web:2dab74b18dd293aff2c361',
-};
+import { firebaseConfig } from './src/firebaseConfig';
 
 let app = null;
 let db = null;
@@ -46,7 +38,6 @@ export async function joinMultiplayer({ playerId, name, color, x, y, outfit, ski
   myId = playerId;
   myRef = ref(db, `players/${playerId}`);
 
-  // Lire d'abord les données existantes pour préserver totalDistancePx
   let existingTotalDistancePx = 0;
   try {
     const snap = await get(myRef);
