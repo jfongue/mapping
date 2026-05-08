@@ -4,16 +4,21 @@
 import React, { useMemo } from 'react';
 import { View } from 'react-native';
 import { TILES_DATA, TILE_PX, MAP_W, MAP_H, WALKABLE } from '../src/tilemap';
-import { getTileBiome } from '../src/tilemap';
-import { BIOMES, Z_OFFSET } from '../src/biomes';
+import { BIOMES, Z_OFFSET, getBiomeAt } from '../src/biomes';
 import { rng } from '../src/random';
 
-// Densité max d'éléments par chunk (perf guard)
 const MAX_ELEMENTS = 1200;
 
 // ─── Formes procédurales ────────────────────────────────────────────────────
 
-// Arbre générique (forêt, jungle)
+function shiftLightness(hex, amount) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = Math.min(255, ((n >> 16) & 0xff) + amount);
+  const g = Math.min(255, ((n >> 8)  & 0xff) + amount);
+  const b = Math.min(255, ( n        & 0xff) + amount);
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+}
+
 function Tree({ x, y, seed, tint }) {
   const r = rng(seed);
   const h = 18 + r() * 14;
@@ -24,30 +29,25 @@ function Tree({ x, y, seed, tint }) {
   const litCrown  = tint ? shiftLightness(tint, 20) : '#4A7C5F';
   return (
     <View style={{ position: 'absolute', left: x - spread, top: y - h - spread, width: spread * 2, height: h + spread }}>
-      {/* Ombre portée */}
       <View style={{
         position: 'absolute', left: spread + lean * 1.5 - spread * 0.7,
         top: h + spread * 0.6, width: spread * 1.4, height: spread * 0.5,
         borderRadius: spread, backgroundColor: 'rgba(0,0,0,0.12)',
       }} />
-      {/* Tronc */}
       <View style={{
         position: 'absolute', left: spread + lean - 2, top: spread * 0.8,
         width: 4, height: h * 0.7, backgroundColor: '#5C4033', borderRadius: 2,
       }} />
-      {/* Couronne arrière */}
       <View style={{
         position: 'absolute', left: spread - spread * 0.95, top: 0,
         width: spread * 1.9, height: spread * 1.9, borderRadius: spread,
         backgroundColor: darkCrown,
       }} />
-      {/* Couronne gauche */}
       <View style={{
         position: 'absolute', left: spread - spread * 0.8, top: spread * 0.15,
         width: spread * 1.4, height: spread * 1.4, borderRadius: spread,
         backgroundColor: midCrown,
       }} />
-      {/* Couronne lit */}
       <View style={{
         position: 'absolute', left: spread - spread * 0.5, top: spread * 0.3,
         width: spread * 1.1, height: spread * 1.1, borderRadius: spread,
@@ -57,7 +57,6 @@ function Tree({ x, y, seed, tint }) {
   );
 }
 
-// Palmier (désert/jungle)
 function Palm({ x, y, seed }) {
   const r = rng(seed);
   const h = 22 + r() * 12;
@@ -68,7 +67,6 @@ function Palm({ x, y, seed }) {
         position: 'absolute', left: 20 + lean - 2, top: 8,
         width: 4, height: h, backgroundColor: '#8B6914', borderRadius: 2,
       }} />
-      {/* Feuilles */}
       {[0, 60, 120, 180, 240, 300].map((deg, i) => (
         <View key={i} style={{
           position: 'absolute',
@@ -84,14 +82,12 @@ function Palm({ x, y, seed }) {
   );
 }
 
-// Cactus (désert)
 function Cactus({ x, y, seed }) {
   const r = rng(seed);
   const h = 14 + r() * 10;
   const hasArm = r() > 0.4;
   return (
     <View style={{ position: 'absolute', left: x - 8, top: y - h, width: 16, height: h }}>
-      {/* Corps */}
       <View style={{
         position: 'absolute', left: 5, top: 0,
         width: 6, height: h, backgroundColor: '#4A8A3A', borderRadius: 3,
@@ -109,14 +105,13 @@ function Cactus({ x, y, seed }) {
         </>
       )}
       <View style={{
-        position: 'absolute', left: 5 - 4, top: h * 0.5,
+        position: 'absolute', left: 1, top: h * 0.5,
         width: 8, height: 3, backgroundColor: '#4A8A3A', borderRadius: 2,
       }} />
     </View>
   );
 }
 
-// Buisson générique
 function Bush({ x, y, seed, color }) {
   const r = rng(seed);
   const s = 7 + r() * 6;
@@ -137,7 +132,6 @@ function Bush({ x, y, seed, color }) {
   );
 }
 
-// Roseau (marais)
 function Reed({ x, y, seed }) {
   const r = rng(seed);
   const h = 16 + r() * 10;
@@ -157,7 +151,6 @@ function Reed({ x, y, seed }) {
   );
 }
 
-// Fleur (plaine)
 function Flower({ x, y, seed }) {
   const r = rng(seed);
   const colors = ['#FFD700', '#FF6B8A', '#FF8C42', '#C8E15A', '#A8D8EA'];
@@ -171,18 +164,8 @@ function Flower({ x, y, seed }) {
   );
 }
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
+// ─── Dispatch ───────────────────────────────────────────────────────────────
 
-// Shift luminosité naïf sur hex (#RRGGBB)
-function shiftLightness(hex, amount) {
-  const n = parseInt(hex.slice(1), 16);
-  const r = Math.min(255, ((n >> 16) & 0xff) + amount);
-  const g = Math.min(255, ((n >> 8)  & 0xff) + amount);
-  const b = Math.min(255, ( n        & 0xff) + amount);
-  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
-}
-
-// Rendu d'un élément par type
 function VegElement({ type, x, y, seed, biome }) {
   const biomeCfg = BIOMES[biome] || BIOMES.plains;
   switch (type) {
@@ -206,43 +189,38 @@ function VegElement({ type, x, y, seed, biome }) {
 export default function VegetationLayer() {
   const elements = useMemo(() => {
     const out = [];
-    const cellRng = rng(0xVE6E74);
+    // Seed valide (0xVE6E74 était invalide — remplacé par 0xE6E740)
+    const cellRng = rng(0xE6E740);
 
     for (let cy = 0; cy < MAP_H && out.length < MAX_ELEMENTS; cy++) {
       for (let cx = 0; cx < MAP_W && out.length < MAX_ELEMENTS; cx++) {
         const tileType = TILES_DATA[cy * MAP_W + cx];
         if (!WALKABLE[tileType]) continue;
 
-        const biome = getTileBiome(tileType, cx, cy);
+        // getBiomeAt(cx, cy) — depuis biomes.js, pas tilemap.js
+        const biome = getBiomeAt(cx, cy);
         if (!biome) continue;
         const cfg = BIOMES[biome];
 
-        // Probabilité de spawn
         const roll = cellRng();
         if (roll > cfg.vegDensity) continue;
 
-        // Type de végétal selon biome
         const vegTypes = cfg.vegetation;
         const typeIdx = Math.floor(cellRng() * vegTypes.length);
         const type = vegTypes[typeIdx];
 
-        // Position pixel centrée sur la cellule avec légère variation
         const offsetX = (cellRng() - 0.5) * TILE_PX * 0.6;
         const offsetY = (cellRng() - 0.5) * TILE_PX * 0.6;
         const px = cx * TILE_PX + TILE_PX / 2 + offsetX;
         const py = cy * TILE_PX + TILE_PX / 2 + offsetY;
 
-        // Seed unique et déterministe par élément
         const seed = (cy * MAP_W + cx) * 31 + typeIdx;
-
-        // Y de tri = position pixel + z-offset du type (painter's sort)
         const sortY = py + (Z_OFFSET[type] || 0);
 
         out.push({ type, px, py, seed, biome, sortY });
       }
     }
 
-    // Painter's sort : Y croissant = éléments proches du bas dessinés en dernier (devant)
     out.sort((a, b) => a.sortY - b.sortY);
     return out;
   }, []);
