@@ -6,21 +6,18 @@ export const MAP_SIZE = 2000;
 export const GRID_STEP = 200;
 
 // Vitesse de déplacement de base : 8 px/s
-// → trajet (68,16)→(109,38) ≈ 2325 px ≈ 5 min
-// Les équipements futurs (bottes, montures…) multiplieront cette valeur
-// via un facteur transmis à movementDuration().
 export const SPEED_PX_PER_SEC = 8;
 
-// Durée min : 10 s (évite les téléportations sur tap accidentel)
-// Durée max : 30 min (sécurité contre les trajets aberrants)
+// Durée min : 10 s | max : 30 min
 export const MIN_DURATION_MS = 10 * 1000;
 export const MAX_DURATION_MS = 30 * 60 * 1000;
 
 export const PX_PER_METER = 10;
 
-// === Caméra ===
+// === Camera ===
 export const MIN_SCALE = 0.4;
 export const MAX_SCALE = 2.5;
+export const PAN_THRESHOLD_PX = 5;
 
 // === Multi ===
 export const ONLINE_THRESHOLD_MS = 30 * 1000;
@@ -31,6 +28,13 @@ export const SPEED_LEVELS = [1, 2, 5, 10, 20, 50, 100];
 // === Layout ===
 export const TOP_SAFE =
   (Platform.OS === 'android' ? RNStatusBar.currentHeight || 24 : 44) + 12;
+
+// === Rayons UI / gameplay ===
+export const LETTER_PICKUP_RADIUS = 130;
+export const PLAYER_NEAR_RADIUS = 130;
+export const RECENTER_HIDE_RADIUS = 90;
+export const LETTER_READABLE_RADIUS = 80;
+export const LETTER_SNAP_RADIUS = 40;
 
 // === Profil ===
 export const PLAYER_COLORS = [
@@ -49,6 +53,9 @@ export const ANIMAL_NAMES = [
 // v3 : map 128×128 → coords antérieures invalides, on reset au spawn central
 export const SAVE_KEY = '@treasureProto.pos.v3';
 export const PROFILE_KEY = '@treasureProto.profile.v1';
+export const INVENTORY_KEY = '@treasureProto.inventory.v1';
+export const FOLLOWED_PLAYERS_KEY = '@treasureProto.followedPlayers.v1';
+export const TOTAL_DISTANCE_KEY = 'TOTAL_DISTANCE_KEY';
 
 // === Spawn ===
 export const SPAWN = { x: 29, y: 29 };
