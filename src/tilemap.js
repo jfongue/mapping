@@ -18,8 +18,8 @@ export const WALKABLE = {
   5: false,
 };
 
-export const WALK_COST   = { 0: 20.0, 1: 1.0, 2: 1.0, 3: 1.33 };
-export const SPEED_MUL_TILE = { 0: 0.05, 1: 1.0, 2: 1.0, 3: 0.75 };
+export const WALK_COST   = { 0: 200.0, 1: 1.0, 2: 1.0, 3: 1.33 };
+export const SPEED_MUL_TILE = { 0: 0.005, 1: 1.0, 2: 1.0, 3: 0.75 };
 
 export const TILE_COLORS = {
   0: '#bce0e8', // water
