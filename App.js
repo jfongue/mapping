@@ -97,7 +97,7 @@ function buildStraightPath(cellPath, startPx) {
 const MAP_SIZE = MAP_W_PX;
 const SPAWN = { x: (MAP_W / 2) * TILE_PX, y: (MAP_H / 2) * TILE_PX };
 import { formatMeters, formatDuration } from './src/format';
-import { movementDuration, lerpFromTarget, remainingDurationAt } from './src/movement';
+import { movementDurationAlongPath, movementDuration, lerpFromTarget, remainingDurationAt } from './src/movement';
 import { generateProfile, isPlayerOnline } from './src/profile';
 
 import SleepyZzz from './components/SleepyZzz';
@@ -830,10 +830,8 @@ export default function App() {
 
   const startMoveAlongCurve = (samples, length) => {
     if (!samples || samples.length < 2) return;
-    const baseDuration = Math.max(
-      MIN_DURATION_MS,
-      Math.min(MAX_DURATION_MS, (length / SPEED_PX_PER_SEC) * 1000)
-    );
+    // Calcul durée tenant compte du coût terrain (eau ×300)
+    const { durationMs: baseDuration } = movementDurationAlongPath(samples);
     const dur = baseDuration / speedMul;
     moveTarget.current = samples[samples.length - 1];
     moveBaseDuration.current = baseDuration;
@@ -1103,12 +1101,9 @@ export default function App() {
   };
 
   const previewStats = pendingTarget ? (() => {
-    const length = pendingTarget.length || 0;
-    const durMs = Math.max(
-      MIN_DURATION_MS,
-      Math.min(MAX_DURATION_MS, (length / SPEED_PX_PER_SEC) * 1000)
-    ) / Math.max(1, speedMul);
-    return { dist: Math.round(length), durSec: Math.round(durMs / 1000) };
+    const samples = pendingTarget.samples;
+    const { durationMs: durMs } = movementDurationAlongPath(samples);
+    return { dist: Math.round(pendingTarget.length || 0), durSec: Math.round(durMs / Math.max(1, speedMul) / 1000) };
   })() : null;
 
   // --- Modale liste des joueurs ---
