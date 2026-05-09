@@ -9,8 +9,20 @@ export const TILES = {
   VOLCANO: 5,
 };
 
+// Un tile walkable peut être traversé par le pathfinding.
 export const WALKABLE = {
   0: true,   // water : traversable mais coût ×200
+  1: true,
+  2: true,
+  3: true,
+  4: false,
+  5: false,
+};
+
+// Un tile selectable peut être choisi comme destination finale par le joueur.
+// L'eau est traversable mais PAS sélectionnable : on ne peut pas terminer un trajet dans l'eau.
+export const SELECTABLE = {
+  0: false,  // water : non sélectionnable
   1: true,
   2: true,
   3: true,
@@ -241,22 +253,33 @@ class MinHeap {
   get size() { return this.a.length; }
 }
 
+// findPath : recherche un chemin de (sx,sy) vers (tx,ty).
+// Si la destination n'est pas SELECTABLE (ex: eau), on cherche la case SELECTABLE
+// la plus proche pour rediriger la destination. L'eau reste traversable en chemin.
 export function findPath(tiles, W, H, sx, sy, tx, ty) {
   sx=Math.round(sx); sy=Math.round(sy); tx=Math.round(tx); ty=Math.round(ty);
   if (sx===tx&&sy===ty) return [{x:tx,y:ty}];
   if (tx<0||tx>=W||ty<0||ty>=H) return null;
-  if (!WALKABLE[tiles[ty*W+tx]]) {
+
+  // Redirection si la cible n'est pas walkable OU pas sélectionnable
+  const targetTile = tiles[ty*W+tx];
+  if (!WALKABLE[targetTile] || !SELECTABLE[targetTile]) {
     let best=null, bestD=Infinity;
-    for (let r=1; r<6; r++) {
+    for (let r=1; r<10; r++) {
       for (let yy=ty-r; yy<=ty+r; yy++) for (let xx=tx-r; xx<=tx+r; xx++) {
         if (xx<0||xx>=W||yy<0||yy>=H) continue;
-        if (WALKABLE[tiles[yy*W+xx]]) { const d=Math.hypot(xx-tx,yy-ty); if (d<bestD){bestD=d;best={x:xx,y:yy};} }
+        const tt = tiles[yy*W+xx];
+        if (WALKABLE[tt] && SELECTABLE[tt]) {
+          const d=Math.hypot(xx-tx,yy-ty);
+          if (d<bestD){bestD=d;best={x:xx,y:yy};}
+        }
       }
       if (best) break;
     }
     if (!best) return null;
     tx=best.x; ty=best.y;
   }
+
   const N=W*H;
   const gScore=new Float32Array(N); gScore.fill(Infinity);
   const prev=new Int32Array(N); prev.fill(-1);
