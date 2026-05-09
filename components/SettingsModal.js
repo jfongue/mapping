@@ -1,4 +1,4 @@
-// Modal réglages : pseudo, outfit/skin/hair/hat, debug.
+// Modal réglages : pseudo, outfit/skin/hair/hat, debug, déconnexion.
 import React from 'react';
 import {
   StyleSheet, View, Text, TextInput, ScrollView,
@@ -25,6 +25,7 @@ export default function SettingsModal({
   onDebugSpeedPressIn,
   onDebugSpeedPressOut,
   debugSpeedMul,
+  onLogout,
 }) {
   const outfit = profile?.outfit || 'red';
   const skin = profile?.skin || 'light';
@@ -141,7 +142,7 @@ export default function SettingsModal({
                   styles.debugActionText,
                   debugSpeedMul > 1 && styles.debugActionTextActive,
                 ]}>
-                  ⏩ Accélération{debugSpeedMul > 1 ? ` ×${debugSpeedMul}` : ''}
+                  ⏩ Accélération{debugSpeedMul > 1 ? ` ×${debugSpeedMul}` : ''}
                 </Text>
                 <Text style={styles.debugActionHint}>Maintenir pour accélérer</Text>
               </TouchableOpacity>
@@ -153,7 +154,7 @@ export default function SettingsModal({
                   onPress={onDebugGenerateMessage}
                   activeOpacity={0.75}
                 >
-                  <Text style={styles.debugActionText}>📜 Générer un message au sol</Text>
+                  <Text style={styles.debugActionText}>📜 Générer un message au sol</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -166,6 +167,17 @@ export default function SettingsModal({
         >
           <Text style={styles.closeText}>OK</Text>
         </TouchableOpacity>
+
+        {/* Bouton déconnecter */}
+        {onLogout && (
+          <TouchableOpacity
+            style={styles.logoutBtn}
+            onPress={() => { onClose(); onLogout(); }}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.logoutText}>↩ Changer de profil</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
@@ -258,6 +270,19 @@ const styles = StyleSheet.create({
     paddingVertical: 12, borderRadius: THEME.radiusMd, alignItems: 'center',
   },
   closeText: { color: THEME.textOnDark, fontSize: 15, fontWeight: '700' },
+  logoutBtn: {
+    marginTop: 8,
+    paddingVertical: 10,
+    borderRadius: THEME.radiusMd,
+    borderWidth: 1.5,
+    borderColor: THEME.danger,
+    alignItems: 'center',
+  },
+  logoutText: {
+    color: THEME.danger,
+    fontSize: 14,
+    fontWeight: '700',
+  },
   // Section debug
   debugSection: {
     marginTop: 10,
