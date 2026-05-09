@@ -47,6 +47,13 @@ import { sampleAt } from './src/smoothing';
 import TileLayer, { MAP_W_PX, MAP_H_PX } from './components/TileLayer';
 import DottedTrail from './components/DottedTrail';
 import XPBar from './components/XPBar';
+import FogLayer from './components/FogLayer';
+import { useFogCharPos } from './src/hooks/useFogCharPos';
+
+// Rayon de vision en cellules
+const FOG_REVEAL_RADIUS = 3.5;
+// Clé de sauvegarde du brouillard
+const FOG_KEY = '@treasureProto.fog.v2';
 
 const WATER_COLOR = '#bce0e8';
 
@@ -89,6 +96,25 @@ function buildStraightPath(cellPath, startPx) {
     length += Math.hypot(wps[i].x - wps[i - 1].x, wps[i].y - wps[i - 1].y);
   }
   return { samples: wps, length };
+}
+
+/** Calcule le Set des clés "col,row" dans le rayon autour d'un point px */
+function getTilesInRadius(px, py, radiusCells) {
+  const cx = Math.floor(px / TILE_PX);
+  const cy = Math.floor(py / TILE_PX);
+  const r = Math.ceil(radiusCells);
+  const keys = [];
+  for (let dy = -r; dy <= r; dy++) {
+    for (let dx = -r; dx <= r; dx++) {
+      if (Math.hypot(dx, dy) <= radiusCells) {
+        const nx = cx + dx, ny = cy + dy;
+        if (nx >= 0 && nx < MAP_W && ny >= 0 && ny < MAP_H) {
+          keys.push(`${nx},${ny}`);
+        }
+      }
+    }
+  }
+  return keys;
 }
 
 const MAP_SIZE = MAP_W_PX;
@@ -189,6 +215,71 @@ export default function App() {
   const totalY = Animated.add(ty, dy);
 
   const pinchListenerId = useRef(null);
+
+  // --- Brouillard de guerre ---
+  // Set<"col,row"> des tuiles déjà découvertes (persisté AsyncStorage)
+  const [explored, setExplored] = useState(() => new Set());
+  const exploredRef = useRef(new Set());
+  const fogSaveTimer = useRef(null);
+
+  // Position du personnage en JS (pas Animated.Value) pour le FogLayer
+  const fogCharPos = useFogCharPos(animX, animY, 20);
+
+  // Charge le brouillard sauvegardé
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(FOG_KEY);
+        if (raw) {
+          const arr = JSON.parse(raw);
+          if (Array.isArray(arr)) {
+            const s = new Set(arr);
+            exploredRef.current = s;
+            setExplored(s);
+          }
+        }
+      } catch (e) {}
+    })();
+  }, []);
+
+  // Révèle les tuiles autour de la position courante
+  const revealTilesAround = (px, py) => {
+    const keys = getTilesInRadius(px, py, FOG_REVEAL_RADIUS);
+    let changed = false;
+    for (const k of keys) {
+      if (!exploredRef.current.has(k)) {
+        exploredRef.current.add(k);
+        changed = true;
+      }
+    }
+    if (changed) {
+      const snap = new Set(exploredRef.current);
+      setExplored(snap);
+      // Sauvegarde debouncée
+      if (fogSaveTimer.current) clearTimeout(fogSaveTimer.current);
+      fogSaveTimer.current = setTimeout(() => {
+        AsyncStorage.setItem(FOG_KEY, JSON.stringify([...exploredRef.current])).catch(() => {});
+      }, 3000);
+    }
+  };
+
+  // Suivi fog : révèle en continu pendant le déplacement (tous les ~500ms)
+  useEffect(() => {
+    if (!moving) {
+      // Révèle aussi à l'arrêt (position finale)
+      revealTilesAround(animX.__getValue(), animY.__getValue());
+      return;
+    }
+    const id = setInterval(() => {
+      revealTilesAround(animX.__getValue(), animY.__getValue());
+    }, 500);
+    return () => clearInterval(id);
+  }, [moving]);
+
+  // Révèle au chargement initial
+  useEffect(() => {
+    if (loaded) revealTilesAround(animX.__getValue(), animY.__getValue());
+  }, [loaded]);
 
   // --- Suivi de joueurs ---
   const [followedPlayers, setFollowedPlayers] = useState(new Set());
@@ -784,7 +875,6 @@ export default function App() {
 
   const startMoveAlongCurve = (samples, length) => {
     if (!samples || samples.length < 2) return;
-    // Calcul durée tenant compte du coût terrain (eau ×300)
     const { durationMs: baseDuration } = movementDurationAlongPath(samples);
     const dur = baseDuration / speedMul;
     moveTarget.current = samples[samples.length - 1];
@@ -1135,6 +1225,13 @@ export default function App() {
                   <TouchableWithoutFeedback onPress={handleTap}>
                     <View style={StyleSheet.absoluteFill}>
                       <TileLayer />
+                      {/* ===== BROUILLARD DE GUERRE ===== */}
+                      <FogLayer
+                        discovered={explored}
+                        charPos={fogCharPos}
+                        revealRadiusCells={FOG_REVEAL_RADIUS}
+                      />
+                      {/* =============================== */}
                       {pendingTarget && (
                         <DottedTrail samples={pendingTarget.samples} color="#3a7ea8" spacing={26} size={6} opacity={0.95} />
                       )}
@@ -1229,7 +1326,6 @@ export default function App() {
 
         {moving && <TravelingBar eta={eta} onStop={stopMove} />}
 
-        {/* Modale fin de trajet */}
         <Modal
           visible={!!tripSummary}
           transparent
@@ -1266,7 +1362,6 @@ export default function App() {
           </View>
         </Modal>
 
-        {/* Modale liste des joueurs */}
         {renderPlayersListModal()}
 
         {showRecenterBtn && (
@@ -1284,7 +1379,6 @@ export default function App() {
           </TouchableOpacity>
         )}
 
-        {/* Flèches uniquement pour les joueurs suivis */}
         {viewport.w > 0 && otherPlayers
           .filter((p) => followedPlayers.has(p.id))
           .map((p) => {
@@ -1298,7 +1392,6 @@ export default function App() {
           })
         }
 
-        {/* Badge en ligne — cliquable pour ouvrir la liste */}
         {profile && (
           <TouchableOpacity
             style={styles.onlineBadge}
@@ -1491,7 +1584,6 @@ const styles = StyleSheet.create({
     alignItems: 'center', marginTop: 4,
   },
   tripSummaryBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
-  // --- Modale joueurs ---
   playersModalOverlay: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.45)',
     justifyContent: 'flex-start', alignItems: 'flex-start',
