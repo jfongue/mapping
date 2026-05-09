@@ -10,7 +10,7 @@ export const TILES = {
 };
 
 export const WALKABLE = {
-  0: true,   // water : traversable mais coût ×20
+  0: true,   // water : traversable mais coût ×200
   1: true,
   2: true,
   3: true,
@@ -304,8 +304,6 @@ function lineOfSight(a, b, tiles, W) {
 }
 
 // Calcule la durée effective d'un chemin en tenant compte des coûts terrain.
-// path : tableau de {x, y} en coordonnées cellules.
-// Retourne la distance pondérée (en unités de cellule, équivalent coût).
 export function pathWeightedCost(path, tiles, W) {
   if (!path || path.length < 2) return 0;
   let total = 0;

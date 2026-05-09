@@ -12,9 +12,9 @@ export const GRID_STEP = 200;
 export const SPEED_PX_PER_SEC = 8;
 
 // Durée min : 10 s (évite les téléportations sur tap accidentel)
-// Durée max : 30 min (sécurité contre les trajets aberrants)
+// Durée max : 2 h
 export const MIN_DURATION_MS = 10 * 1000;
-export const MAX_DURATION_MS = 30 * 60 * 1000;
+export const MAX_DURATION_MS = 2 * 60 * 60 * 1000;
 
 export const PX_PER_METER = 10;
 
