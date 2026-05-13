@@ -21,7 +21,7 @@ import {
 
 import {
   MIN_SCALE, MAX_SCALE,
-  ONLINE_THRESHOLD_MS, TAP_PLAYER_RADIUS, SPEED_LEVELS,
+  ONLINE_THRESHOLD_MS, TAP_PLAYER_RADIUS,
   TOP_SAFE, SAVE_KEY, PROFILE_KEY,
   TOTAL_DISTANCE_KEY,
   LETTER_PICKUP_RADIUS, PLAYER_NEAR_RADIUS, RECENTER_HIDE_RADIUS, FOG_REVEAL_RADIUS,
@@ -46,6 +46,7 @@ import { useFogCharPos } from './src/hooks/useFogCharPos';
 import { useFogOfWar } from './src/hooks/useFogOfWar';
 import { useFollowedPlayers } from './src/hooks/useFollowedPlayers';
 import { useInventory } from './src/hooks/useInventory';
+import { useBoostSpeed } from './src/hooks/useBoostSpeed';
 
 import { safePixelPos, buildStraightPath } from './src/mapUtils';
 
@@ -104,10 +105,8 @@ export default function App() {
   const bounce = useRef(new Animated.Value(0)).current;
   const breathe = useRef(new Animated.Value(0)).current;
 
-  const [speedLvl, setSpeedLvl] = useState(0);
   const [debugEnabled, setDebugEnabled] = useState(false);
-  const speedMul = SPEED_LEVELS[speedLvl];
-  const speedTimer = useRef(null);
+  const { speedLvl, speedMul, onPressIn: onSpeedPressIn, onPressOut: onSpeedPressOut } = useBoostSpeed();
 
   const [profile, setProfile] = useState(null);
   const [otherPlayers, setOtherPlayers] = useState([]);
@@ -489,10 +488,6 @@ export default function App() {
     activePathRef.current = newSamples;
     startMoveAlongCurve(newSamples, length);
   }, [speedMul]);
-
-  useEffect(() => {
-    return () => { if (speedTimer.current) clearTimeout(speedTimer.current); };
-  }, []);
 
   const onPanGesture = Animated.event(
     [{ nativeEvent: { translationX: dx, translationY: dy } }],
@@ -904,22 +899,6 @@ export default function App() {
     } catch (e) {
       console.warn('debug drop letter failed', e);
     }
-  };
-
-  const onSpeedPressIn = () => {
-    setSpeedLvl(1);
-    let lvl = 1;
-    const tick = () => {
-      lvl++;
-      if (lvl >= SPEED_LEVELS.length) return;
-      setSpeedLvl(lvl);
-      speedTimer.current = setTimeout(tick, 600);
-    };
-    speedTimer.current = setTimeout(tick, 600);
-  };
-  const onSpeedPressOut = () => {
-    if (speedTimer.current) clearTimeout(speedTimer.current);
-    setSpeedLvl(0);
   };
 
   const openSettings = () => { setDraftName(profile?.name || ''); setSettingsOpen(true); };
