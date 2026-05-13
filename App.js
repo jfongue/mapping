@@ -23,7 +23,7 @@ import {
   MIN_SCALE, MAX_SCALE,
   ONLINE_THRESHOLD_MS, TAP_PLAYER_RADIUS, SPEED_LEVELS,
   TOP_SAFE, SAVE_KEY, PROFILE_KEY,
-  INVENTORY_KEY, TOTAL_DISTANCE_KEY,
+  TOTAL_DISTANCE_KEY,
   LETTER_PICKUP_RADIUS, PLAYER_NEAR_RADIUS, RECENTER_HIDE_RADIUS, FOG_REVEAL_RADIUS,
   WATER_COLOR,
 } from './src/constants';
@@ -45,6 +45,7 @@ import FogLayer from './components/FogLayer';
 import { useFogCharPos } from './src/hooks/useFogCharPos';
 import { useFogOfWar } from './src/hooks/useFogOfWar';
 import { useFollowedPlayers } from './src/hooks/useFollowedPlayers';
+import { useInventory } from './src/hooks/useInventory';
 
 import { safePixelPos, buildStraightPath } from './src/mapUtils';
 
@@ -122,10 +123,15 @@ export default function App() {
   const [letterDraft, setLetterDraft] = useState('');
   const [readingLetter, setReadingLetter] = useState(null);
 
-  const [inventory, setInventory] = useState([]);
-  const [inventoryLoaded, setInventoryLoaded] = useState(false);
-  const [inventoryOpen, setInventoryOpen] = useState(false);
-  const unreadCount = inventory.filter((l) => l.unread).length;
+  const {
+    inventory,
+    open: inventoryOpen,
+    setOpen: setInventoryOpen,
+    unreadCount,
+    addItem: addInventoryItem,
+    markRead: markInventoryRead,
+    deleteItem: deleteInventoryItem,
+  } = useInventory();
 
   const activePathRef = useRef(null);
   const [frozenActivePath, setFrozenActivePath] = useState(null);
@@ -396,24 +402,6 @@ export default function App() {
     const unsub = subscribeLetters(setLetters);
     return () => unsub();
   }, []);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const raw = await AsyncStorage.getItem(INVENTORY_KEY);
-        if (raw) {
-          const data = JSON.parse(raw);
-          if (Array.isArray(data)) setInventory(data);
-        }
-      } catch (e) {}
-      setInventoryLoaded(true);
-    })();
-  }, []);
-
-  useEffect(() => {
-    if (!inventoryLoaded) return;
-    AsyncStorage.setItem(INVENTORY_KEY, JSON.stringify(inventory)).catch(() => {});
-  }, [inventory, inventoryLoaded]);
 
   useEffect(() => {
     const id = setInterval(() => { globalNowRef.current = Date.now(); }, 5000);
@@ -800,10 +788,7 @@ export default function App() {
           authorName: pickup.authorName, authorColor: pickup.authorColor,
           text: pickup.text, pickedAt: Date.now(), unread: true,
         };
-        setInventory((prev) => {
-          if (prev.some((l) => l.id === pickup.id)) return prev;
-          return [...prev, newItem];
-        });
+        addInventoryItem(newItem);
         consumeLetter(pickup.id).catch(() => {});
         pickedUpItems.push(newItem);
       }
@@ -1265,8 +1250,8 @@ export default function App() {
         {readingLetter && <LetterReadModal letter={readingLetter} onClose={closeReadingLetter} />}
         {inventoryOpen && (
           <InventoryModal items={inventory} totalDistancePx={totalDistancePx} onClose={() => setInventoryOpen(false)}
-            onMarkRead={(id) => setInventory((prev) => prev.map((l) => l.id === id ? { ...l, unread: false } : l))}
-            onDelete={(id) => setInventory((prev) => prev.filter((l) => l.id !== id))} />
+            onMarkRead={markInventoryRead}
+            onDelete={deleteInventoryItem} />
         )}
       </View>
     </GestureHandlerRootView>
