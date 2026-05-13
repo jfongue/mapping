@@ -23,7 +23,7 @@ import {
   MIN_SCALE, MAX_SCALE,
   ONLINE_THRESHOLD_MS, TAP_PLAYER_RADIUS, SPEED_LEVELS,
   TOP_SAFE, SAVE_KEY, PROFILE_KEY,
-  INVENTORY_KEY, FOLLOWED_PLAYERS_KEY, TOTAL_DISTANCE_KEY, FOG_KEY,
+  INVENTORY_KEY, FOLLOWED_PLAYERS_KEY, TOTAL_DISTANCE_KEY,
   LETTER_PICKUP_RADIUS, PLAYER_NEAR_RADIUS, RECENTER_HIDE_RADIUS, FOG_REVEAL_RADIUS,
   WATER_COLOR,
 } from './src/constants';
@@ -43,8 +43,9 @@ import DottedTrail from './components/DottedTrail';
 import XPBar from './components/XPBar';
 import FogLayer from './components/FogLayer';
 import { useFogCharPos } from './src/hooks/useFogCharPos';
+import { useFogOfWar } from './src/hooks/useFogOfWar';
 
-import { safePixelPos, buildStraightPath, getTilesInRadius } from './src/mapUtils';
+import { safePixelPos, buildStraightPath } from './src/mapUtils';
 
 const MAP_SIZE = MAP_W_PX;
 const SPAWN = { x: (MAP_W / 2) * TILE_PX, y: (MAP_H / 2) * TILE_PX };
@@ -146,69 +147,9 @@ export default function App() {
   const pinchListenerId = useRef(null);
 
   // --- Brouillard de guerre ---
-  // Set<"col,row"> des tuiles déjà découvertes (persisté AsyncStorage)
-  const [explored, setExplored] = useState(() => new Set());
-  const exploredRef = useRef(new Set());
-  const fogSaveTimer = useRef(null);
-
   // Position du personnage en JS (pas Animated.Value) pour le FogLayer
   const fogCharPos = useFogCharPos(animX, animY, 20);
-
-  // Charge le brouillard sauvegardé
-  useEffect(() => {
-    (async () => {
-      try {
-        const raw = await AsyncStorage.getItem(FOG_KEY);
-        if (raw) {
-          const arr = JSON.parse(raw);
-          if (Array.isArray(arr)) {
-            const s = new Set(arr);
-            exploredRef.current = s;
-            setExplored(s);
-          }
-        }
-      } catch (e) {}
-    })();
-  }, []);
-
-  // Révèle les tuiles autour de la position courante
-  const revealTilesAround = (px, py) => {
-    const keys = getTilesInRadius(px, py, FOG_REVEAL_RADIUS);
-    let changed = false;
-    for (const k of keys) {
-      if (!exploredRef.current.has(k)) {
-        exploredRef.current.add(k);
-        changed = true;
-      }
-    }
-    if (changed) {
-      const snap = new Set(exploredRef.current);
-      setExplored(snap);
-      // Sauvegarde debouncée
-      if (fogSaveTimer.current) clearTimeout(fogSaveTimer.current);
-      fogSaveTimer.current = setTimeout(() => {
-        AsyncStorage.setItem(FOG_KEY, JSON.stringify([...exploredRef.current])).catch(() => {});
-      }, 3000);
-    }
-  };
-
-  // Suivi fog : révèle en continu pendant le déplacement (tous les ~500ms)
-  useEffect(() => {
-    if (!moving) {
-      // Révèle aussi à l'arrêt (position finale)
-      revealTilesAround(animX.__getValue(), animY.__getValue());
-      return;
-    }
-    const id = setInterval(() => {
-      revealTilesAround(animX.__getValue(), animY.__getValue());
-    }, 500);
-    return () => clearInterval(id);
-  }, [moving]);
-
-  // Révèle au chargement initial
-  useEffect(() => {
-    if (loaded) revealTilesAround(animX.__getValue(), animY.__getValue());
-  }, [loaded]);
+  const { explored } = useFogOfWar({ animX, animY, moving, loaded });
 
   // --- Suivi de joueurs ---
   const [followedPlayers, setFollowedPlayers] = useState(new Set());
