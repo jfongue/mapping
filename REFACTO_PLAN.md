@@ -1,194 +1,166 @@
-# Plan de refacto App.js — phases 2 → 4
+# Plan de refacto App.js — état & suite
 
-État courant : `App.js` 1453 LOC. Branche `refacto-claude`.
-Objectif final : `App.js` < 250 LOC (orchestration uniquement).
+Branche : `refacto-claude`.  
+App.js : **1320 LOC** (départ 1631, soit -19% déjà fait).  
+Objectif final : App.js < 300 LOC, orchestration uniquement.
 
 ---
 
-## Inventaire ciblé (lignes App.js après phase 1)
+## Hooks déjà extraits
 
-| Bloc | Lignes | État | Useable / Refs |
+| Hook | Fichier | Notes |
+|---|---|---|
+| `useFogCharPos` | `src/hooks/useFogCharPos.js` | (existait) |
+| `useFogOfWar` | `src/hooks/useFogOfWar.js` | + cleanup unmount, warn dev |
+| `useFollowedPlayers` | `src/hooks/useFollowedPlayers.js` | |
+| `useInventory` | `src/hooks/useInventory.js` | unreadCount mémoïsé |
+| `useBoostSpeed` | `src/hooks/useBoostSpeed.js` | timer cleanup |
+| `useSpriteAnims` | `src/hooks/useSpriteAnims.js` | bounce/breathe |
+| `useProfile` | `src/hooks/useProfile.js` | App.js conserve wrapper `saveProfile` qui relaye `updateMyProfile` firebase |
+| `useLetters` | `src/hooks/useLetters.js` | guard `typeof unsub === 'function'` |
+
+Fichiers déplacés : helpers purs → `src/mapUtils.js`. Constantes → `src/constants.js`.
+
+---
+
+## Inventaire restant dans App.js (lignes au 1320 LOC)
+
+| Bloc | Lignes | Densité | Cible |
 |---|---|---|---|
-| Caméra (tx/ty/pan/pinch/scale) | 77–89, 184–223, 539–608, 855–902 | dense | tx,ty,baseScale,pinchScale,lastScale,pinchStartScale,dx,dy,userHasPanned,showRecenterBtn,followRafId,isInitialCenter,pinchAnchor,pinchListenerId |
-| Position/Move/Trip | 91–100, 129–137, 224–303, 703–844 | dense | pos,moving,target,eta,animX,animY,currentAnim,moveTarget,activePathRef,frozenActivePath,consumedDist,lastConsumedTick,tripTotalLengthRef,tripStartedAtRef,progressRef,progressListenerId,totalDistancePx,tripSummary,pendingPickupRef |
-| Fog | ✅ extrait (`useFogOfWar`) | done | — |
-| Profile | 110, 305–419 (≈) | moyen | profile,draftName,settingsOpen |
-| Multiplayer (subscribe + anims) | 111–115, 420–530 (≈), 614–650 | dense | otherPlayers,selectedPlayer,playerAnims,globalNowRef |
-| Letters | 119–122, 469–530 (≈), 632–701 | moyen | letters,letterWriteOpen,letterDraft,readingLetter |
-| Inventory | 124–126, 497–530 (≈) | léger | inventory,inventoryLoaded,inventoryOpen |
-| Followed players | 155–183 | léger | followedPlayers,playersListOpen |
-| Speed boost | 105–108, 949–963 | léger | speedLvl,speedTimer |
-| Debug toggle | 106, 979–990 | léger | debugEnabled |
-| Recenter visibility polling (150ms) | 484–495 | **à virer** | bench listener Animated |
-| Bounce/Breathe loops | 102–103, 233–254 | léger | bounce,breathe |
-| HUD (boutons inline) | ~1051–1453 du JSX | dense | extraire en `<HUDButtons />` |
-| PlayersListModal | `renderPlayersListModal` 992+ | inline | extraire fichier |
-| TripSummary Modal | inline ~1118+ | inline | extraire fichier |
-
-> Les line ranges sont des estimations actuelles — re-grep avant chaque extraction (`grep -n "useEffect" App.js`).
+| Caméra (refs anim + pan/pinch) | 81–95, 157–158, 163, 174–202, 458–531 | dense | `useCamera` |
+| Position/mouvement | 97–106, 145–155, 591–737 | dense | `useMovement` |
+| Multiplayer (join/sub + anims joueurs + helpers tap) | 117–120, 250–392, 533–558 | **dense critique** | `useMultiplayer` |
+| Recenter visibility polling 150ms | 399–418 | à virer | `tx`/`ty`/`dx`/`dy` addListener — perf win |
+| Initial centering | 420–432 | léger | dans `useCamera` |
+| handleTap (mix letter+player+pos) | 561–589 | léger | reste dans App ou `useTap` |
+| PlayersListModal inline | 859 (`renderPlayersListModal`) | UI | composant à extraire |
+| TripSummary `<Modal>` inline | dans le return JSX | UI | composant à extraire |
+| Settings handlers (openSettings/save/toggleDebug) | 834–855 | léger | reste dans App (couple firebase) |
 
 ---
 
-## Ordre d'extraction recommandé
+## Ordre des prochains commits (groupés pour limiter le nombre)
 
-Du plus isolé au plus couplé. **Un commit par étape**, smoke test entre chaque.
+### Commit A — `useMultiplayer`
+**Le plus de valeur** : isole 200 lignes denses + apporte une vraie optimisation.
 
-### Phase 2 — Hooks (par difficulté croissante)
+Source : 117–120, 155, 250–277, 279–392, 533–558.
 
-1. **`useInventory(profile)`** → léger, isolé, AsyncStorage uniquement.
-   - In : `profile` (pour gating ?)
-   - Out : `{ inventory, addItem, consumeItem, open, setOpen, loaded }`
-   - Lignes : 124–126, load/save AsyncStorage scattered, consumeLetter calls.
-
-2. **`useFollowedPlayers()`** → AsyncStorage isolé.
-   - Out : `{ followed, toggle, isFollowed }`
-   - Lignes : 155–183.
-
-3. **`useBoostSpeed()`** → léger.
-   - Out : `{ speedLvl, speedMul, onPressIn, onPressOut }`
-   - Lignes : 105–108, 949–963.
-
-4. **`useSpriteAmbientAnims()`** → bounce + breathe loops.
-   - Returns `{ bounce, breathe }`.
-   - Lignes : 102–103, 233–254.
-   - ⚠️ Ajouter cleanup `.stop()` sur unmount.
-
-5. **`useProfile()`** → load/save, gen, update.
-   - Out : `{ profile, draftName, setDraftName, saveProfile, validateName }`
-   - Lignes : 110, 305–419 (à isoler).
-
-6. **`useLetters({ profile, pos })`** → subscribe + send + pickup.
-   - Out : `{ letters, writeOpen, setWriteOpen, draft, setDraft, sendLetter, readingLetter, openLetter, closeLetter }`
-   - Lignes : 119–122, ~469–530, 632–701.
-
-7. **`useMultiplayer({ profile })`** → join/leave + sync + anims.
-   - Out : `{ otherPlayers, playerAnims, selectedPlayer, setSelectedPlayer, isOnline, computePlayerPos, findTappedPlayer, findPlayerNearPoint }`
-   - Lignes : 111–115, 420–530 (sub), 614–650 (helpers tap/near).
-   - ⚠️ Mémoriser par playerId, ne recalculer `findPath`+`Animated.sequence` que pour le joueur qui change. Stop anims au unmount.
-
-8. **`useCamera({ viewport })`** → le gros. Inclut pan, pinch, follow loop, recenter, centerOnPoint, markUserHasPanned, showRecenterBtn (via Animated listener, pas polling).
-   - Out : `{ tx, ty, baseScale, pinchScale, dx, dy, pinch/pan handlers, recenter, centerOnPoint, markUserHasPanned, showRecenterBtn, onCanvasLayout, viewport }`
-   - Lignes : 77–89, 184–223, 539–608, 855–902.
-   - ⚠️ **Remplacer le polling 150ms (l. 484–495) par `tx.addListener`/`ty.addListener` + recompute conditionnel.**
-
-9. **`useMovement({ pos, setPos, animX, animY, profile, speedMul, ... })`** → le plus couplé.
-   - Out : `{ moving, target, eta, frozenActivePath, consumedDist, tripSummary, dismissTripSummary, startMoveAlongCurve, stopMove, confirmMove, cancelMove, pendingTarget, setPendingTarget, totalDistancePx }`
-   - Lignes : 91–100, 129–137, 224–303, 703–844.
-   - ⚠️ Cleanup `progress.removeListener`, `currentAnim?.stop()` au unmount.
-
-### Phase 3 — Composants UI
-
-10. **`<PlayersListModal />`** — extraire `renderPlayersListModal()` (ligne ~992+) dans `components/PlayersListModal.js`.
-11. **`<TripSummaryModal />`** — extraire le `<Modal>` inline (~1118+) dans `components/TripSummaryModal.js` (le fichier existait, on l'a supprimé en phase 1 — le recréer plus proprement avec props).
-12. **`<MapCanvas />`** — encapsule `PinchGestureHandler`+`PanGestureHandler`+`Animated.View`+layers. Reçoit handlers + données en props. Ligne ~1051–1115 du JSX.
-13. **`<HUDButtons />`** — recenter / speed / settings / inventory / letter. Bas du JSX.
-14. **`<OtherPlayersLayer />`** — boucle sur `otherPlayers` (sprites + labels).
-15. **`<LettersOverlay />`** — boucle sur `letters` (icônes au sol).
-
-### Phase 4 — Robustesse transverse
-
-16. Wrapper `src/storage.js` : `safeGet(key)`, `safeSet(key, val)` (try/catch + JSON safe + warn dev). Migrer tous les `AsyncStorage.*` dispersés.
-17. `src/firebase.js` : guard `typeof unsub === 'function'` avant appel.
-18. Cleanup unmount global : audit final, tous les listeners/anims/timers doivent avoir un teardown.
-
----
-
-## Signatures pré-conçues (pour aller vite)
-
+Hook :
 ```js
-// src/hooks/useInventory.js
-export function useInventory() {
-  return { inventory, addItem, consumeItem, loaded, open, setOpen };
-}
-
-// src/hooks/useFollowedPlayers.js
-export function useFollowedPlayers() {
-  return { followed, toggle, isFollowed };
-}
-
-// src/hooks/useBoostSpeed.js
-export function useBoostSpeed() {
-  return { speedLvl, speedMul, onPressIn, onPressOut };
-}
-
-// src/hooks/useProfile.js
-export function useProfile() {
-  return { profile, draftName, setDraftName, saveProfile, validateName };
-}
-
-// src/hooks/useLetters.js
-export function useLetters({ profile, pos }) {
-  return {
-    letters, writeOpen, setWriteOpen, draft, setDraft, sendLetter,
-    readingLetter, openLetter, closeLetter,
-    findLetterNearPoint,
-  };
-}
-
-// src/hooks/useMultiplayer.js
-export function useMultiplayer({ profile }) {
-  return {
-    otherPlayers, playerAnims, selectedPlayer, setSelectedPlayer,
-    isOnline, computePlayerPos, findTappedPlayer, findPlayerNearPoint,
-    globalNow,
-  };
-}
-
-// src/hooks/useCamera.js
-export function useCamera({ viewport }) {
-  return {
-    tx, ty, baseScale, pinchScale, dx, dy,
-    onPanGesture, onPanStateChange, onPinchGesture, onPinchStateChange,
-    onCanvasLayout, viewport,
-    recenter, centerOnPoint, markUserHasPanned,
-    showRecenterBtn,
-  };
-}
-
-// src/hooks/useMovement.js
-export function useMovement({ pos, setPos, animX, animY, profile, speedMul, onArrive }) {
-  return {
-    moving, target, eta, pendingTarget, setPendingTarget,
-    frozenActivePath, consumedDist, totalDistancePx,
-    tripSummary, dismissTripSummary,
-    startMoveAlongCurve, stopMove, confirmMove, cancelMove,
-  };
-}
+useMultiplayer({ profile, animX, animY, totalDistanceRef, setTotalDistancePx })
+  → { otherPlayers, playerAnims, selectedPlayer, setSelectedPlayer,
+      isOnline, computePlayerPos,
+      findTappedPlayer, findPlayerNearPoint,
+      globalNow }
 ```
 
+⚠️ Optimisation à intégrer **dans la même PR** :
+- Mémoriser par playerId dans un `Map<id, prevPayload>` ; ne recalculer `findPath` + `Animated.sequence` **que pour les joueurs qui ont changé** depuis le dernier tick (comparer `lastKey`).
+- Cleanup unmount : stop toutes les animations de `playerAnims`, vider le Map.
+- Guard `typeof unsub === 'function'` avant unsub.
+- Conserver `globalNowRef` interne, exposer un `globalNow` (number ou getter) via le hook.
+
+Notes :
+- `joinMultiplayer` retourne `result.totalDistancePx` qui hydrate `setTotalDistancePx`. Soit on passe `setTotalDistancePx` en input (couplage simple), soit le hook expose `onJoinedDistancePx` callback. Choisir l'option callback : plus testable.
+
+### Commit B — `useCamera`
+Source : 81–95, 157–158, 163, 174–212, 399–432, 458–531, 740–786.
+
+Hook :
+```js
+useCamera({ viewport, getCharPos })  // getCharPos: () => ({ x, y })
+  → { tx, ty, baseScale, pinchScale, dx, dy,
+      onPanGesture, onPanStateChange,
+      onPinchGesture, onPinchStateChange,
+      onCanvasLayout, setViewport,
+      recenter, centerOnPoint, markUserHasPanned,
+      showRecenterBtn }
+```
+
+⚠️ Remplacements à faire dans la même PR :
+1. **Tuer le polling 150ms (l. 399–418)** : ajouter `tx.addListener`/`ty.addListener`/`dx.addListener`/`dy.addListener` (ou un seul sur une dérivée), recompute conditionnel + `setShowRecenterBtn`. Économie : 6.7 ticks/s en moins.
+2. Remplacer `animX.__getValue()` / `animY.__getValue()` par `getCharPos()` (passé en arg). Découpler le hook de l'`animX/animY` du mouvement.
+3. Initial-centering (420–432) absorbé dans le hook, déclenché par `loaded` + `viewport` passés en deps.
+
+### Commit C — `useMovement`
+Le plus couplé. Garder pour la fin.  
+Source : 97–106, 145–155, 591–739, 788–832 (random walkable helper).
+
+Hook :
+```js
+useMovement({
+  pos, setPos, animX, animY, profile, speedMul,
+  onPickupLetter,        // (item) => void (= addInventoryItem)
+  onTotalDistanceUpdate, // (newTotalPx) => void
+})
+  → { moving, target, eta,
+      pendingTarget, setPendingTarget,
+      activePath, frozenActivePath, consumedDist,
+      tripSummary, dismissTripSummary,
+      totalDistancePx,
+      startMoveAlongCurve, stopMove,
+      confirmMove, cancelMove,
+      findRandomWalkableTileNearPlayer }
+```
+
+⚠️ Pièges :
+- `progressRef.addListener` (l. 620–621) doit **toujours** `removeListener` avant un nouveau `addListener`. Bug latent probable, à corriger pendant l'extraction.
+- `currentAnim.current?.stop()` au unmount.
+- `pendingPickupRef` est partagé entre `confirmMove` et `finalizeArrival` → géré en closure interne du hook.
+- `useEffect [moving]` qui recompute le path quand `speedMul` change (l. 434+) : préserver.
+- L'`useEffect` de scheduleArrivalNotification doit déménager ici.
+
+### Commit D — Composants UI
+- `<PlayersListModal>` (recréer le fichier supprimé en phase 1, mais en y mettant uniquement la logique d'affichage + onClose + onSelect).
+- `<TripSummaryModal>` (idem, recréer propre).
+- `<MapCanvas>` : encapsule `Pinch`+`Pan`+`Animated.View`+layers (tile, fog, paths, players, sprite). Reçoit les Animated.Value + handlers + données.
+- `<HUDButtons>` : recenter / speed / settings / inventory / letter.
+
+Approche : un seul commit pour tout, ou un par composant si on veut tester entre. Préférence : **un commit groupé**, vu que les composants sont indépendants entre eux.
+
+### Commit E — Phase 4 robustesse transverse
+1. `src/storage.js` : wrapper `safeGet(key)` / `safeSet(key, val)` (try/catch + JSON safe + warn). Migrer les `AsyncStorage` restants (`SAVE_KEY`, `TOTAL_DISTANCE_KEY`).
+2. Audit final cleanup : tous les `addListener` / `setInterval` / `setTimeout` / `Animated.loop` doivent avoir un teardown.
+3. Vérifier toutes les Promise `firebase` ont un `.catch` (sinon, log dev).
+
 ---
 
-## Pièges identifiés (à ne pas rater)
+## Pièges & règles de jeu
 
-1. **Couplage `animX`/`animY` ↔ caméra** : `useCamera` n'a pas besoin d'eux directement pour pan/pinch, mais `recenter`/`centerOnPoint`/`startFollowLoop` les lisent en `__getValue()`. → Passer `getCharPos: () => ({x,y})` en arg pour découpler.
-2. **`progressRef.addListener`** (l. 732) accumule des callbacks si `startMoveAlongCurve` est appelé plusieurs fois. Vérifier que `removeListener` est bien fait avant le nouveau `addListener`. Bug latent probable.
-3. **`pendingPickupRef`** (l. 703) couplé entre `confirmMove` et `finalizeArrival` — passer via closure dans `useMovement`.
-4. **`globalNowRef`** est consulté par `isOnline` partout. Soit le passer en arg de `useMultiplayer`, soit dériver d'un `useGlobalNow()` minimaliste.
-5. **`__getValue()`** sur `Animated.Value` est privé/déprécié. Préférer `addListener` + ref locale dans les hooks (pattern déjà utilisé par `useFogCharPos`).
-6. **`Modal` inline non extraits** : `tripSummaryModal` et `playersListModal` n'ont pas de fichier — ne pas oublier de créer les composants.
-
----
-
-## Checklist smoke test (après chaque hook extrait)
-
-- [ ] App démarre sans crash, pas d'erreur console rouge
-- [ ] Tap sur la map → preview + bar de confirmation
-- [ ] Confirmation → personnage se déplace, fog s'étend
-- [ ] Pinch + pan fonctionnent, recenter apparaît hors écran
-- [ ] Bouton recenter recentre + cache
-- [ ] Settings open/close, changement de nom persiste
-- [ ] Speed boost (long press) change la vitesse
-- [ ] Inventory open/close
-- [ ] Autres joueurs apparaissent et bougent (si online)
-- [ ] Fermer/rouvrir l'app → pos, profile, fog, inventory persistent
+1. **`animX.__getValue()` est privé/déprécié.** Préférer un listener qui pousse dans une ref locale (pattern `useFogCharPos`).
+2. **Ordre des hooks dans App.js compte** : `useProfile` doit précéder `useMultiplayer` (qui le lit), `useMovement` doit précéder `useCamera` si ce dernier doit savoir où est le perso (alors qu'avec `getCharPos: () => ({x,y})` le couplage est annulé).
+3. **`saveProfile` dans App.js est un wrapper** autour de `persistProfile` du hook + `updateMyProfile` firebase. Ne pas remettre dans le hook (le hook reste pur AsyncStorage).
+4. **`dropLetter` et `consumeLetter` sont importés deux fois sémantiquement** : depuis `useLetters` (write/pickup direct), mais aussi appelés depuis le code de movement (finalizeArrival fait `consumeLetter` après pickup, et debug message fait `dropLetter`). Ces appels resteront dans `useMovement` (consume) et App.js (debug).
+5. **`globalNowRef`** : actuellement un ref bump toutes les 5s. À garder interne à `useMultiplayer` (seul `isOnline` s'en sert vraiment).
+6. Avant chaque extraction : **re-`grep -n`** les line ranges, elles shiftent.
 
 ---
 
-## Conseils d'exécution pour la prochaine session
+## Checklist smoke test (à dérouler après chaque commit)
 
-- **Re-grep avant chaque extraction** : les lignes shiftent à chaque commit.
-- **Un hook = un commit** atomique. Branche déjà en place : `refacto-claude`.
-- **Tester compile** entre chaque (`npx expo start` ou `npm run lint`).
-- **Ne pas changer de comportement** : refacto pur d'abord, perfs/robustesse en phase 4 dédiée.
-- **Si bloqué** : isoler le hook avec ses dépendances brutes (passer 10 args si besoin), simplifier la signature en phase 4.
-- Toutes les **constantes** sont déjà dans `src/constants.js`. Les **helpers purs** dans `src/mapUtils.js`. Réutiliser.
+- [ ] App démarre, pas d'erreur console
+- [ ] Pinch + pan fonctionnent, bouton recenter apparaît hors écran
+- [ ] Tap → preview + confirmation
+- [ ] Confirm → personnage bouge, fog s'étend, ETA s'affiche
+- [ ] Arrivée → trip summary
+- [ ] Ramasse une lettre → apparait dans inventaire (badge unread)
+- [ ] Inventaire open/close, mark read, delete
+- [ ] Settings change nom → persiste après reload
+- [ ] Speed boost (long press)
+- [ ] Autres joueurs apparaissent + animent + cleanup quand offline
+- [ ] Reload app → pos, profile, fog, inventory persistent
+
+---
+
+## Tableau de bord
+
+| Commit | Effet attendu sur App.js |
+|---|---|
+| A — useMultiplayer | -150 à -200 LOC + perf win |
+| B — useCamera | -150 LOC + perf win (kill polling 150ms) |
+| C — useMovement | -200 LOC |
+| D — Composants UI | -200 à -300 LOC |
+| E — robustesse | ±0 LOC |
+
+Cible finale : **App.js ~250–300 LOC**.
