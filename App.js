@@ -23,7 +23,7 @@ import {
   MIN_SCALE, MAX_SCALE,
   ONLINE_THRESHOLD_MS, TAP_PLAYER_RADIUS, SPEED_LEVELS,
   TOP_SAFE, SAVE_KEY, PROFILE_KEY,
-  INVENTORY_KEY, FOLLOWED_PLAYERS_KEY, TOTAL_DISTANCE_KEY,
+  INVENTORY_KEY, TOTAL_DISTANCE_KEY,
   LETTER_PICKUP_RADIUS, PLAYER_NEAR_RADIUS, RECENTER_HIDE_RADIUS, FOG_REVEAL_RADIUS,
   WATER_COLOR,
 } from './src/constants';
@@ -44,6 +44,7 @@ import XPBar from './components/XPBar';
 import FogLayer from './components/FogLayer';
 import { useFogCharPos } from './src/hooks/useFogCharPos';
 import { useFogOfWar } from './src/hooks/useFogOfWar';
+import { useFollowedPlayers } from './src/hooks/useFollowedPlayers';
 
 import { safePixelPos, buildStraightPath } from './src/mapUtils';
 
@@ -152,34 +153,8 @@ export default function App() {
   const { explored } = useFogOfWar({ animX, animY, moving, loaded });
 
   // --- Suivi de joueurs ---
-  const [followedPlayers, setFollowedPlayers] = useState(new Set());
+  const { followed: followedPlayers, toggle: toggleFollow } = useFollowedPlayers();
   const [playersListOpen, setPlayersListOpen] = useState(false);
-
-  // Persiste les joueurs suivis
-  useEffect(() => {
-    (async () => {
-      try {
-        const raw = await AsyncStorage.getItem(FOLLOWED_PLAYERS_KEY);
-        if (raw) {
-          const arr = JSON.parse(raw);
-          if (Array.isArray(arr)) setFollowedPlayers(new Set(arr));
-        }
-      } catch (e) {}
-    })();
-  }, []);
-
-  const toggleFollow = (playerId) => {
-    setFollowedPlayers((prev) => {
-      const next = new Set(prev);
-      if (next.has(playerId)) {
-        next.delete(playerId);
-      } else {
-        next.add(playerId);
-      }
-      AsyncStorage.setItem(FOLLOWED_PLAYERS_KEY, JSON.stringify([...next])).catch(() => {});
-      return next;
-    });
-  };
 
   const computeCenteredOffset = (charX, charY, vw, vh, s) => {
     const cx = MAP_W_PX / 2;
