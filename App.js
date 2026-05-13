@@ -23,8 +23,6 @@ import {
   MIN_SCALE, MAX_SCALE,
   ONLINE_THRESHOLD_MS, TAP_PLAYER_RADIUS, SPEED_LEVELS,
   TOP_SAFE, SAVE_KEY, PROFILE_KEY,
-  PLAYER_COLORS,
-  SPEED_PX_PER_SEC, MIN_DURATION_MS, MAX_DURATION_MS,
 } from './src/constants';
 import { THEME } from './src/theme';
 
@@ -120,7 +118,7 @@ function getTilesInRadius(px, py, radiusCells) {
 const MAP_SIZE = MAP_W_PX;
 const SPAWN = { x: (MAP_W / 2) * TILE_PX, y: (MAP_H / 2) * TILE_PX };
 import { formatMeters, formatDuration } from './src/format';
-import { movementDurationAlongPath, movementDuration, lerpFromTarget, remainingDurationAt } from './src/movement';
+import { movementDurationAlongPath, movementDuration, lerpFromTarget } from './src/movement';
 import { generateProfile, isPlayerOnline } from './src/profile';
 
 import SleepyZzz from './components/SleepyZzz';
@@ -982,38 +980,6 @@ export default function App() {
     }
   };
 
-  const startMove = (t) => {
-    const { baseDurationMs } = movementDuration(pos, t, 1);
-    moveTarget.current = t;
-    moveBaseDuration.current = baseDurationMs;
-    setMoving(true);
-    const dur = baseDurationMs / speedMul;
-    announceMove({ from: { x: pos.x, y: pos.y }, to: t, startTs: Date.now(), durationMs: dur });
-    runMoveAnim(dur);
-  };
-
-  const runMoveAnim = (duration) => {
-    const t = moveTarget.current;
-    if (!t) return;
-    setEta(Date.now() + duration);
-    const anim = Animated.parallel([
-      Animated.timing(animX, { toValue: t.x, duration, easing: Easing.linear, useNativeDriver: true }),
-      Animated.timing(animY, { toValue: t.y, duration, easing: Easing.linear, useNativeDriver: true }),
-    ]);
-    currentAnim.current = anim;
-    anim.start(({ finished }) => {
-      if (finished) {
-        setPos(t);
-        clearMyMove(t.x, t.y);
-        setMoving(false);
-        setEta(null);
-        setTarget(null);
-        currentAnim.current = null;
-        moveTarget.current = null;
-      }
-    });
-  };
-
   const recenter = () => {
     const vw = viewport.w || SCREEN_W;
     const vh = viewport.h || SCREEN_H;
@@ -1464,14 +1430,6 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: WATER_COLOR, overflow: 'hidden' },
   canvas: { flex: 1 },
   map: { position: 'absolute', backgroundColor: WATER_COLOR },
-  player: {
-    position: 'absolute', width: 28, height: 28, borderRadius: 14,
-    backgroundColor: '#ff6b6b', borderWidth: 3, borderColor: '#fff',
-  },
-  otherPlayer: {
-    position: 'absolute', width: 24, height: 24, borderRadius: 12,
-    borderWidth: 2, borderColor: '#fff', opacity: 0.95,
-  },
   otherPlayerLabel: {
     position: 'absolute', left: 0, top: 0, width: 120,
     textAlign: 'center', color: '#fff', fontSize: 11, fontWeight: '600',
@@ -1490,12 +1448,6 @@ const styles = StyleSheet.create({
   previewTargetInner: {
     position: 'absolute', width: 12, height: 12, borderRadius: 6, backgroundColor: '#ffd93d',
   },
-  hud: { position: 'absolute', top: 60, left: 0, right: 0, alignItems: 'center' },
-  hudText: {
-    color: '#fff', backgroundColor: 'rgba(0,0,0,0.6)',
-    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
-    fontSize: 13, fontWeight: '600',
-  },
   recenterBtn: {
     position: 'absolute', bottom: 156, right: 16,
     width: 48, height: 48, borderRadius: 24,
@@ -1503,7 +1455,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
     ...THEME.shadow, shadowRadius: 12,
   },
-  iconText: { color: THEME.text, fontSize: 22, fontWeight: '700' },
   speedBtn: {
     position: 'absolute', bottom: 160, left: 16,
     paddingHorizontal: 16, paddingVertical: 10, borderRadius: 22,
@@ -1520,7 +1471,6 @@ const styles = StyleSheet.create({
   },
   onlineDot: { width: 9, height: 9, borderRadius: 4.5, marginRight: 7, borderWidth: 1, borderColor: THEME.border },
   onlineText: { color: THEME.text, fontSize: 12, fontWeight: '700' },
-  recenterBtnText: { color: THEME.text, fontSize: 22 },
   settingsBtn: {
     position: 'absolute', top: TOP_SAFE, right: 16,
     width: 48, height: 48, borderRadius: 24,
