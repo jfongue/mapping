@@ -51,7 +51,7 @@ import { useSpriteAnims } from './src/hooks/useSpriteAnims';
 import { useProfile } from './src/hooks/useProfile';
 import { useLetters } from './src/hooks/useLetters';
 
-import { safePixelPos, buildStraightPath } from './src/mapUtils';
+import { safePixelPos, buildStraightPath, findRandomWalkableTileNear } from './src/mapUtils';
 
 const MAP_SIZE = MAP_W_PX;
 const SPAWN = { x: (MAP_W / 2) * TILE_PX, y: (MAP_H / 2) * TILE_PX };
@@ -807,31 +807,9 @@ export default function App() {
     });
   };
 
-  const findRandomWalkableTileNearPlayer = () => {
-    const originTx = Math.floor(pos.x / TILE_PX);
-    const originTy = Math.floor(pos.y / TILE_PX);
-    const MIN_R = 5;
-    const MAX_R = 15;
-    const candidates = [];
-    for (let dy2 = -MAX_R; dy2 <= MAX_R; dy2++) {
-      for (let dx2 = -MAX_R; dx2 <= MAX_R; dx2++) {
-        const dist = Math.max(Math.abs(dx2), Math.abs(dy2));
-        if (dist < MIN_R || dist > MAX_R) continue;
-        const nx = originTx + dx2;
-        const ny = originTy + dy2;
-        if (nx < 0 || nx >= MAP_W || ny < 0 || ny >= MAP_H) continue;
-        if (WALKABLE[TILES_DATA[ny * MAP_W + nx]]) {
-          candidates.push({ x: nx * TILE_PX + TILE_PX / 2, y: ny * TILE_PX + TILE_PX / 2 });
-        }
-      }
-    }
-    if (candidates.length === 0) return null;
-    return candidates[Math.floor(Math.random() * candidates.length)];
-  };
-
   const handleDebugGenerateMessage = async () => {
     if (!profile) return;
-    const dropPos = findRandomWalkableTileNearPlayer();
+    const dropPos = findRandomWalkableTileNear(pos);
     if (!dropPos) return;
     const msgIndex = Math.floor(Math.random() * DEBUG_MESSAGES.length);
     const text = DEBUG_MESSAGES[msgIndex];

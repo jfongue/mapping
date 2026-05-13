@@ -55,6 +55,33 @@ export function buildStraightPath(cellPath, startPx) {
   return { samples: wps, length };
 }
 
+/**
+ * Trouve une tile walkable aléatoire entre minR et maxR (en cellules)
+ * autour d'une position pixel. Retourne {x,y} en pixels ou null.
+ */
+export function findRandomWalkableTileNear(pxPos, minR = 5, maxR = 15) {
+  const originTx = Math.floor(pxPos.x / TILE_PX);
+  const originTy = Math.floor(pxPos.y / TILE_PX);
+  const candidates = [];
+  for (let dy = -maxR; dy <= maxR; dy++) {
+    for (let dx = -maxR; dx <= maxR; dx++) {
+      const dist = Math.max(Math.abs(dx), Math.abs(dy));
+      if (dist < minR || dist > maxR) continue;
+      const nx = originTx + dx;
+      const ny = originTy + dy;
+      if (nx < 0 || nx >= MAP_W || ny < 0 || ny >= MAP_H) continue;
+      if (WALKABLE[TILES_DATA[ny * MAP_W + nx]]) {
+        candidates.push({
+          x: nx * TILE_PX + TILE_PX / 2,
+          y: ny * TILE_PX + TILE_PX / 2,
+        });
+      }
+    }
+  }
+  if (candidates.length === 0) return null;
+  return candidates[Math.floor(Math.random() * candidates.length)];
+}
+
 /** Calcule les clés "col,row" des tiles dans le rayon (en cellules) autour d'un point px. */
 export function getTilesInRadius(px, py, radiusCells) {
   const cx = Math.floor(px / TILE_PX);
