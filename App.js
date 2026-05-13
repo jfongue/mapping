@@ -23,6 +23,9 @@ import {
   MIN_SCALE, MAX_SCALE,
   ONLINE_THRESHOLD_MS, TAP_PLAYER_RADIUS, SPEED_LEVELS,
   TOP_SAFE, SAVE_KEY, PROFILE_KEY,
+  INVENTORY_KEY, FOLLOWED_PLAYERS_KEY, TOTAL_DISTANCE_KEY, FOG_KEY,
+  LETTER_PICKUP_RADIUS, PLAYER_NEAR_RADIUS, RECENTER_HIDE_RADIUS, FOG_REVEAL_RADIUS,
+  WATER_COLOR,
 } from './src/constants';
 import { THEME } from './src/theme';
 
@@ -33,13 +36,6 @@ import {
   cancelArrivalNotification,
 } from './src/notifications';
 
-const INVENTORY_KEY = '@treasureProto.inventory.v1';
-const FOLLOWED_PLAYERS_KEY = '@treasureProto.followedPlayers.v1';
-const TOTAL_DISTANCE_KEY = 'TOTAL_DISTANCE_KEY';
-const LETTER_PICKUP_RADIUS = 130;
-const PLAYER_NEAR_RADIUS = 130;
-const RECENTER_HIDE_RADIUS = 90;
-
 import { TILES_DATA, MAP_W, MAP_H, TILE_PX, WALKABLE, findPath } from './src/tilemap';
 import { sampleAt } from './src/smoothing';
 import TileLayer, { MAP_W_PX, MAP_H_PX } from './components/TileLayer';
@@ -48,72 +44,7 @@ import XPBar from './components/XPBar';
 import FogLayer from './components/FogLayer';
 import { useFogCharPos } from './src/hooks/useFogCharPos';
 
-// Rayon de vision en cellules
-const FOG_REVEAL_RADIUS = 3.5;
-// Clé de sauvegarde du brouillard
-const FOG_KEY = '@treasureProto.fog.v2';
-
-const WATER_COLOR = '#bce0e8';
-
-function safePixelPos(px, py) {
-  const tx = Math.floor(px / TILE_PX);
-  const ty = Math.floor(py / TILE_PX);
-  const tileIdx = ty * MAP_W + tx;
-  if (
-    tx >= 0 && tx < MAP_W && ty >= 0 && ty < MAP_H &&
-    WALKABLE[TILES_DATA[tileIdx]]
-  ) {
-    return { x: px, y: py };
-  }
-  for (let r = 1; r <= 20; r++) {
-    for (let dy = -r; dy <= r; dy++) {
-      for (let dx = -r; dx <= r; dx++) {
-        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
-        const nx = tx + dx, ny = ty + dy;
-        if (nx < 0 || nx >= MAP_W || ny < 0 || ny >= MAP_H) continue;
-        if (WALKABLE[TILES_DATA[ny * MAP_W + nx]]) {
-          return {
-            x: nx * TILE_PX + TILE_PX / 2,
-            y: ny * TILE_PX + TILE_PX / 2,
-          };
-        }
-      }
-    }
-  }
-  return { x: (MAP_W / 2) * TILE_PX, y: (MAP_H / 2) * TILE_PX };
-}
-
-function buildStraightPath(cellPath, startPx) {
-  const wps = cellPath.map((c) => ({
-    x: c.x * TILE_PX + TILE_PX / 2,
-    y: c.y * TILE_PX + TILE_PX / 2,
-  }));
-  if (startPx) wps[0] = { x: startPx.x, y: startPx.y };
-  let length = 0;
-  for (let i = 1; i < wps.length; i++) {
-    length += Math.hypot(wps[i].x - wps[i - 1].x, wps[i].y - wps[i - 1].y);
-  }
-  return { samples: wps, length };
-}
-
-/** Calcule le Set des clés "col,row" dans le rayon autour d'un point px */
-function getTilesInRadius(px, py, radiusCells) {
-  const cx = Math.floor(px / TILE_PX);
-  const cy = Math.floor(py / TILE_PX);
-  const r = Math.ceil(radiusCells);
-  const keys = [];
-  for (let dy = -r; dy <= r; dy++) {
-    for (let dx = -r; dx <= r; dx++) {
-      if (Math.hypot(dx, dy) <= radiusCells) {
-        const nx = cx + dx, ny = cy + dy;
-        if (nx >= 0 && nx < MAP_W && ny >= 0 && ny < MAP_H) {
-          keys.push(`${nx},${ny}`);
-        }
-      }
-    }
-  }
-  return keys;
-}
+import { safePixelPos, buildStraightPath, getTilesInRadius } from './src/mapUtils';
 
 const MAP_SIZE = MAP_W_PX;
 const SPAWN = { x: (MAP_W / 2) * TILE_PX, y: (MAP_H / 2) * TILE_PX };

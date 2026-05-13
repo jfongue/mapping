@@ -49,6 +49,19 @@ export const ANIMAL_NAMES = [
 // v3 : map 128×128 → coords antérieures invalides, on reset au spawn central
 export const SAVE_KEY = '@treasureProto.pos.v3';
 export const PROFILE_KEY = '@treasureProto.profile.v1';
+export const INVENTORY_KEY = '@treasureProto.inventory.v1';
+export const FOLLOWED_PLAYERS_KEY = '@treasureProto.followedPlayers.v1';
+export const TOTAL_DISTANCE_KEY = 'TOTAL_DISTANCE_KEY';
+export const FOG_KEY = '@treasureProto.fog.v2';
+
+// === Gameplay radii ===
+export const LETTER_PICKUP_RADIUS = 130;
+export const PLAYER_NEAR_RADIUS = 130;
+export const RECENTER_HIDE_RADIUS = 90;
+export const FOG_REVEAL_RADIUS = 3.5;
+
+// === Couleurs ===
+export const WATER_COLOR = '#bce0e8';
 
 // === Spawn ===
 export const SPAWN = { x: 29, y: 29 };
