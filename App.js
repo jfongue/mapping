@@ -396,25 +396,47 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
+  // Visibilité bouton recenter : on recalcule sur chaque tick d'Animated
+  // (pan, pinch, mouvement) au lieu d'un polling 150ms permanent.
   useEffect(() => {
-    const id = setInterval(() => {
-      const vw = viewport.w || SCREEN_W;
-      const vh = viewport.h || SCREEN_H;
-      if (!vw || !vh) return;
+    const vw = viewport.w || SCREEN_W;
+    const vh = viewport.h || SCREEN_H;
+    if (!vw || !vh) return;
+    const cx = MAP_W_PX / 2;
+    const cy = MAP_H_PX / 2;
+    let pending = false;
+    const recompute = () => {
+      pending = false;
       const s = lastScale.current;
       const charX = animX.__getValue();
       const charY = animY.__getValue();
       const offX = lastOffset.current.x + dx.__getValue();
       const offY = lastOffset.current.y + dy.__getValue();
-      const cx = MAP_W_PX / 2;
-      const cy = MAP_H_PX / 2;
       const screenX = offX + s * charX + cx * (1 - s);
       const screenY = offY + s * charY + cy * (1 - s);
       const dist = Math.hypot(screenX - vw / 2, screenY - vh / 2);
       const shouldShow = dist > RECENTER_HIDE_RADIUS;
       setShowRecenterBtn((prev) => (prev === shouldShow ? prev : shouldShow));
-    }, 150);
-    return () => clearInterval(id);
+    };
+    const schedule = () => {
+      if (pending) return;
+      pending = true;
+      requestAnimationFrame(recompute);
+    };
+    // Recompute initial puis sur chaque changement d'animX/animY/dx/dy
+    schedule();
+    const ids = [
+      animX.addListener(schedule),
+      animY.addListener(schedule),
+      dx.addListener(schedule),
+      dy.addListener(schedule),
+    ];
+    return () => {
+      animX.removeListener(ids[0]);
+      animY.removeListener(ids[1]);
+      dx.removeListener(ids[2]);
+      dy.removeListener(ids[3]);
+    };
   }, [viewport.w, viewport.h]);
 
   useEffect(() => {
