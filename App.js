@@ -16,15 +16,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   joinMultiplayer, announceMove, clearMyMove,
   subscribePlayers, leaveMultiplayer, updateMyProfile,
-  dropLetter, consumeLetter, subscribeLetters,
+  dropLetter, consumeLetter,
 } from './firebase';
 
 import {
   MIN_SCALE, MAX_SCALE,
   ONLINE_THRESHOLD_MS, TAP_PLAYER_RADIUS,
-  TOP_SAFE, SAVE_KEY, PROFILE_KEY,
+  TOP_SAFE, SAVE_KEY,
   TOTAL_DISTANCE_KEY,
-  LETTER_PICKUP_RADIUS, PLAYER_NEAR_RADIUS, RECENTER_HIDE_RADIUS, FOG_REVEAL_RADIUS,
+  PLAYER_NEAR_RADIUS, RECENTER_HIDE_RADIUS, FOG_REVEAL_RADIUS,
   WATER_COLOR,
 } from './src/constants';
 import { THEME } from './src/theme';
@@ -47,6 +47,9 @@ import { useFogOfWar } from './src/hooks/useFogOfWar';
 import { useFollowedPlayers } from './src/hooks/useFollowedPlayers';
 import { useInventory } from './src/hooks/useInventory';
 import { useBoostSpeed } from './src/hooks/useBoostSpeed';
+import { useSpriteAnims } from './src/hooks/useSpriteAnims';
+import { useProfile } from './src/hooks/useProfile';
+import { useLetters } from './src/hooks/useLetters';
 
 import { safePixelPos, buildStraightPath } from './src/mapUtils';
 
@@ -54,7 +57,7 @@ const MAP_SIZE = MAP_W_PX;
 const SPAWN = { x: (MAP_W / 2) * TILE_PX, y: (MAP_H / 2) * TILE_PX };
 import { formatMeters, formatDuration } from './src/format';
 import { movementDurationAlongPath, movementDuration, lerpFromTarget } from './src/movement';
-import { generateProfile, isPlayerOnline } from './src/profile';
+import { isPlayerOnline } from './src/profile';
 
 import SleepyZzz from './components/SleepyZzz';
 import SmoothEdgeArrow from './components/SmoothEdgeArrow';
@@ -102,25 +105,32 @@ export default function App() {
   const moveTarget = useRef(null);
   const moveBaseDuration = useRef(0);
 
-  const bounce = useRef(new Animated.Value(0)).current;
-  const breathe = useRef(new Animated.Value(0)).current;
+  const { bounce, breathe } = useSpriteAnims(moving);
 
-  const [debugEnabled, setDebugEnabled] = useState(false);
   const { speedLvl, speedMul, onPressIn: onSpeedPressIn, onPressOut: onSpeedPressOut } = useBoostSpeed();
 
-  const [profile, setProfile] = useState(null);
+  const {
+    profile, draftName, setDraftName,
+    saveProfile: persistProfile,
+    debugEnabled, setDebugEnabled,
+  } = useProfile();
   const [otherPlayers, setOtherPlayers] = useState([]);
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [draftName, setDraftName] = useState('');
   const playerAnims = useRef(new Map()).current;
 
   const [pendingTarget, setPendingTarget] = useState(null);
 
-  const [letters, setLetters] = useState([]);
-  const [letterWriteOpen, setLetterWriteOpen] = useState(false);
-  const [letterDraft, setLetterDraft] = useState('');
-  const [readingLetter, setReadingLetter] = useState(null);
+  const {
+    letters,
+    writeOpen: letterWriteOpen, setWriteOpen: setLetterWriteOpen,
+    draft: letterDraft, setDraft: setLetterDraft,
+    readingLetter, setReadingLetter,
+    openWrite: openLetterWrite,
+    sendLetter,
+    closeReadingLetter,
+    findLetterNearPoint,
+  } = useLetters({ profile, pos });
 
   const {
     inventory,
@@ -236,22 +246,6 @@ export default function App() {
     if (!loaded) return;
     AsyncStorage.setItem(SAVE_KEY, JSON.stringify({ pos })).catch(() => {});
   }, [loaded, pos]);
-
-  useEffect(() => {
-    (async () => {
-      let p = null;
-      try {
-        const raw = await AsyncStorage.getItem(PROFILE_KEY);
-        if (raw) p = JSON.parse(raw);
-      } catch (e) {}
-      if (!p) {
-        p = generateProfile();
-        AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(p)).catch(() => {});
-      }
-      setProfile(p);
-      setDebugEnabled(!!p.debug);
-    })();
-  }, []);
 
   useEffect(() => {
     if (!profile) return;
@@ -398,11 +392,6 @@ export default function App() {
   }, [otherPlayers]);
 
   useEffect(() => {
-    const unsub = subscribeLetters(setLetters);
-    return () => unsub();
-  }, []);
-
-  useEffect(() => {
     const id = setInterval(() => { globalNowRef.current = Date.now(); }, 5000);
     return () => clearInterval(id);
   }, []);
@@ -427,34 +416,6 @@ export default function App() {
     }, 150);
     return () => clearInterval(id);
   }, [viewport.w, viewport.h]);
-
-  useEffect(() => {
-    if (!moving) {
-      Animated.timing(bounce, { toValue: 0, duration: 150, useNativeDriver: true }).start();
-      return;
-    }
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(bounce, { toValue: 1, duration: 220, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-        Animated.timing(bounce, { toValue: 0, duration: 220, easing: Easing.in(Easing.quad), useNativeDriver: true }),
-      ])
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [moving]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const tick = () => {
-      if (cancelled) return;
-      Animated.sequence([
-        Animated.timing(breathe, { toValue: 1, duration: 2000, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-        Animated.timing(breathe, { toValue: 0, duration: 2000, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-      ]).start(({ finished }) => { if (!cancelled && finished) tick(); });
-    };
-    tick();
-    return () => { cancelled = true; };
-  }, []);
 
   useEffect(() => {
     if (isInitialCenter.current || !loaded || viewport.w === 0) return;
@@ -587,16 +548,6 @@ export default function App() {
     return best;
   };
 
-  const findLetterNearPoint = (px, py, radius = LETTER_PICKUP_RADIUS) => {
-    let best = null, bestD = radius;
-    for (const l of letters) {
-      if (!profile || l.authorId === profile.id) continue;
-      const d = Math.hypot(l.x - px, l.y - py);
-      if (d < bestD) { bestD = d; best = l; }
-    }
-    return best;
-  };
-
   const findPlayerNearPoint = (px, py, radius = PLAYER_NEAR_RADIUS) => {
     let best = null, bestD = radius;
     for (const p of otherPlayers) {
@@ -635,27 +586,6 @@ export default function App() {
       pickupLetter: pickupLetter || null,
       nearPlayer: nearPlayer || null,
     });
-  };
-
-  const openLetterWrite = () => { setLetterDraft(''); setLetterWriteOpen(true); };
-
-  const sendLetter = async () => {
-    const text = (letterDraft || '').trim();
-    if (!text || !profile) return;
-    setLetterWriteOpen(false);
-    setLetterDraft('');
-    try {
-      await dropLetter({
-        authorId: profile.id, authorName: profile.name, authorColor: profile.color,
-        x: pos.x, y: pos.y, text,
-      });
-    } catch (e) { console.warn('drop letter failed', e); }
-  };
-
-  const closeReadingLetter = async () => {
-    const l = readingLetter;
-    setReadingLetter(null);
-    if (l?.id) { try { await consumeLetter(l.id); } catch (e) {} }
   };
 
   const pendingPickupRef = useRef(null);
@@ -904,9 +834,7 @@ export default function App() {
   const openSettings = () => { setDraftName(profile?.name || ''); setSettingsOpen(true); };
 
   const saveProfile = (patch) => {
-    const updated = { ...profile, ...patch };
-    setProfile(updated);
-    AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(updated)).catch(() => {});
+    persistProfile(patch);
     updateMyProfile(patch);
   };
 
