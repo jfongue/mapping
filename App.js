@@ -20,7 +20,6 @@ import {
 import {
   TOP_SAFE,
   TOTAL_DISTANCE_KEY,
-  SPAWN,
   FOG_REVEAL_RADIUS,
   WATER_COLOR,
 } from './src/constants';

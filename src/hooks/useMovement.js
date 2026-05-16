@@ -23,13 +23,16 @@ import {
   announceMove, clearMyMove, updateMyProfile, consumeLetter,
 } from '../../firebase';
 import { safeGetJSON, safeSet, safeSetJSON } from '../storage';
-import { TILE_PX } from '../tilemap';
+import { TILE_PX, MAP_W, MAP_H } from '../tilemap';
 import { sampleAt } from '../smoothing';
 import { movementDurationAlongPath } from '../movement';
 import { safePixelPos } from '../mapUtils';
 import {
-  SAVE_KEY, TOTAL_DISTANCE_KEY, SPAWN,
+  SAVE_KEY, TOTAL_DISTANCE_KEY,
 } from '../constants';
+
+// Centre de la map en pixels (SPAWN dans constants.js est en tile coords).
+const SPAWN_PX = { x: (MAP_W / 2) * TILE_PX, y: (MAP_H / 2) * TILE_PX };
 import {
   scheduleArrivalNotification, cancelArrivalNotification,
 } from '../notifications';
@@ -37,13 +40,13 @@ import {
 const DOT_TICK_PX = 26;
 
 export function useMovement({ profile, speedMul, letters, addInventoryItem, hydratedTotalDistancePx }) {
-  const [pos, setPos] = useState(SPAWN);
+  const [pos, setPos] = useState(SPAWN_PX);
   const [moving, setMoving] = useState(false);
   const [target, setTarget] = useState(null);
   const [eta, setEta] = useState(null);
   const [loaded, setLoaded] = useState(false);
-  const animX = useRef(new Animated.Value(SPAWN.x)).current;
-  const animY = useRef(new Animated.Value(SPAWN.y)).current;
+  const animX = useRef(new Animated.Value(SPAWN_PX.x)).current;
+  const animY = useRef(new Animated.Value(SPAWN_PX.y)).current;
   const currentAnim = useRef(null);
   const moveTarget = useRef(null);
 
