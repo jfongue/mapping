@@ -2,7 +2,7 @@
 // Logique pure dans /src, composants UI dans /components.
 // App.js orchestre uniquement : état React, gestes, animations natives.
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   StyleSheet, View, Text, Animated, Easing,
   TouchableWithoutFeedback, TouchableOpacity, Modal, ScrollView,
@@ -14,27 +14,22 @@ import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import {
-  announceMove, clearMyMove, updateMyProfile,
-  dropLetter, consumeLetter,
+  updateMyProfile, dropLetter,
 } from './firebase';
 
 import {
-  TOP_SAFE, SAVE_KEY,
+  TOP_SAFE,
   TOTAL_DISTANCE_KEY,
+  SPAWN,
   FOG_REVEAL_RADIUS,
   WATER_COLOR,
 } from './src/constants';
 import { THEME } from './src/theme';
 
 // --- Notifications ---
-import {
-  requestNotificationPermissions,
-  scheduleArrivalNotification,
-  cancelArrivalNotification,
-} from './src/notifications';
+import { requestNotificationPermissions } from './src/notifications';
 
-import { TILES_DATA, MAP_W, MAP_H, TILE_PX, WALKABLE, findPath } from './src/tilemap';
-import { sampleAt } from './src/smoothing';
+import { TILES_DATA, MAP_W, MAP_H, TILE_PX, findPath } from './src/tilemap';
 import TileLayer, { MAP_W_PX, MAP_H_PX } from './components/TileLayer';
 import DottedTrail from './components/DottedTrail';
 import XPBar from './components/XPBar';
@@ -49,12 +44,11 @@ import { useProfile } from './src/hooks/useProfile';
 import { useLetters } from './src/hooks/useLetters';
 import { useMultiplayer } from './src/hooks/useMultiplayer';
 import { useCamera } from './src/hooks/useCamera';
+import { useMovement } from './src/hooks/useMovement';
 
-import { safePixelPos, buildStraightPath, findRandomWalkableTileNear } from './src/mapUtils';
-
-const SPAWN = { x: (MAP_W / 2) * TILE_PX, y: (MAP_H / 2) * TILE_PX };
+import { buildStraightPath, findRandomWalkableTileNear } from './src/mapUtils';
 import { formatMeters, formatDuration } from './src/format';
-import { movementDurationAlongPath, movementDuration } from './src/movement';
+import { movementDurationAlongPath } from './src/movement';
 
 import SleepyZzz from './components/SleepyZzz';
 import SmoothEdgeArrow from './components/SmoothEdgeArrow';
@@ -69,21 +63,7 @@ import { ScrollText, Settings, Crosshair, Backpack, Heart } from 'lucide-react-n
 import { DEBUG_MESSAGES, DEBUG_MESSAGE_AUTHORS } from './src/debugMessages';
 
 export default function App() {
-  const [pos, setPos] = useState(SPAWN);
-  const [moving, setMoving] = useState(false);
-  const [target, setTarget] = useState(null);
-  const [eta, setEta] = useState(null);
-  const [loaded, setLoaded] = useState(false);
-  const animX = useRef(new Animated.Value(SPAWN.x)).current;
-  const animY = useRef(new Animated.Value(SPAWN.y)).current;
-  const currentAnim = useRef(null);
-  const moveTarget = useRef(null);
-  const moveBaseDuration = useRef(0);
-
-  const { bounce, breathe } = useSpriteAnims(moving);
-
-  const { speedLvl, speedMul, onPressIn: onSpeedPressIn, onPressOut: onSpeedPressOut } = useBoostSpeed();
-
+  // --- Profil ---
   const {
     profile, draftName, setDraftName,
     saveProfile: persistProfile,
@@ -91,19 +71,10 @@ export default function App() {
   } = useProfile();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  const [pendingTarget, setPendingTarget] = useState(null);
+  // --- Boost vitesse ---
+  const { speedLvl, speedMul, onPressIn: onSpeedPressIn, onPressOut: onSpeedPressOut } = useBoostSpeed();
 
-  const {
-    letters,
-    writeOpen: letterWriteOpen, setWriteOpen: setLetterWriteOpen,
-    draft: letterDraft, setDraft: setLetterDraft,
-    readingLetter, setReadingLetter,
-    openWrite: openLetterWrite,
-    sendLetter,
-    closeReadingLetter,
-    findLetterNearPoint,
-  } = useLetters({ profile, pos });
-
+  // --- Inventaire ---
   const {
     inventory,
     open: inventoryOpen,
@@ -114,8 +85,32 @@ export default function App() {
     deleteItem: deleteInventoryItem,
   } = useInventory();
 
-  const [totalDistancePx, setTotalDistancePx] = useState(0);
+  // --- Lettres (subscribe + write/read) ---
+  const {
+    letters,
+    writeOpen: letterWriteOpen, setWriteOpen: setLetterWriteOpen,
+    draft: letterDraft, setDraft: setLetterDraft,
+    readingLetter, setReadingLetter,
+    openWrite: openLetterWrite,
+    sendLetter: sendLetterAt,
+    closeReadingLetter,
+    findLetterNearPoint,
+  } = useLetters({ profile });
 
+  // --- Mouvement (owns pos, animX/animY, target, eta, trip, totalDistance) ---
+  const {
+    pos, animX, animY, moving, target, eta, loaded,
+    pendingTarget, setPendingTarget,
+    activePathRef, frozenActivePath, consumedDist,
+    tripSummary, dismissTripSummary,
+    totalDistancePx, setTotalDistancePx,
+    startMoveAlongCurve, stopMove, confirmMove, cancelMove,
+  } = useMovement({ profile, speedMul, letters, addInventoryItem });
+
+  // --- Animations sprite ---
+  const { bounce, breathe } = useSpriteAnims(moving);
+
+  // --- Multiplayer ---
   const {
     otherPlayers, playerAnims,
     selectedPlayer, setSelectedPlayer,
@@ -130,18 +125,7 @@ export default function App() {
     },
   });
 
-  const activePathRef = useRef(null);
-  const [frozenActivePath, setFrozenActivePath] = useState(null);
-  const [consumedDist, setConsumedDist] = useState(0);
-  const lastConsumedTick = useRef(0);
-
-  const tripTotalLengthRef = useRef(0);
-  const [tripSummary, setTripSummary] = useState(null);
-  const tripStartedAtRef = useRef(null);
-
-
   // --- Brouillard de guerre ---
-  // Position du personnage en JS (pas Animated.Value) pour le FogLayer
   const fogCharPos = useFogCharPos(animX, animY, 20);
   const { explored } = useFogOfWar({ animX, animY, moving, loaded });
 
@@ -149,7 +133,7 @@ export default function App() {
   const { followed: followedPlayers, toggle: toggleFollow } = useFollowedPlayers();
   const [playersListOpen, setPlayersListOpen] = useState(false);
 
-  // --- Caméra (pan / pinch / recenter / follow loop) ---
+  // --- Caméra ---
   const {
     tx, ty, dx, dy, baseScale, pinchScale, totalX, totalY,
     viewport, onCanvasLayout,
@@ -162,51 +146,13 @@ export default function App() {
     loaded,
   });
 
+  // --- Notifications ---
   useEffect(() => {
     requestNotificationPermissions();
   }, []);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const raw = await AsyncStorage.getItem(SAVE_KEY);
-        if (raw) {
-          const data = JSON.parse(raw);
-          if (data?.pos) {
-            const safe = safePixelPos(data.pos.x, data.pos.y);
-            setPos(safe);
-            animX.setValue(safe.x);
-            animY.setValue(safe.y);
-          }
-        }
-      } catch (e) {}
-      setLoaded(true);
-    })();
-  }, []);
-
-  useEffect(() => {
-    if (!loaded) return;
-    AsyncStorage.setItem(SAVE_KEY, JSON.stringify({ pos })).catch(() => {});
-  }, [loaded, pos]);
-
-  useEffect(() => {
-    if (!moving || !moveTarget.current) return;
-    const samples = activePathRef.current;
-    if (!samples || samples.length < 2) return;
-    if (currentAnim.current) currentAnim.current.stop();
-    const cx = animX.__getValue();
-    const cy = animY.__getValue();
-    const sx = Math.floor(cx / TILE_PX);
-    const sy = Math.floor(cy / TILE_PX);
-    const last = samples[samples.length - 1];
-    const fx = Math.floor(last.x / TILE_PX);
-    const fy = Math.floor(last.y / TILE_PX);
-    const cellPath = findPath(TILES_DATA, MAP_W, MAP_H, sx, sy, fx, fy);
-    if (!cellPath) return;
-    const { samples: newSamples, length } = buildStraightPath(cellPath, { x: cx, y: cy });
-    activePathRef.current = newSamples;
-    startMoveAlongCurve(newSamples, length);
-  }, [speedMul]);
+  // Wrapper sendLetter pour injecter la position courante
+  const sendLetter = () => sendLetterAt({ x: pos.x, y: pos.y });
 
   const handleTap = (evt) => {
     const t = { x: evt.nativeEvent.locationX, y: evt.nativeEvent.locationY };
@@ -236,155 +182,6 @@ export default function App() {
       pickupLetter: pickupLetter || null,
       nearPlayer: nearPlayer || null,
     });
-  };
-
-  const pendingPickupRef = useRef(null);
-
-  const confirmMove = () => {
-    if (!pendingTarget) return;
-    const samples = pendingTarget.samples;
-    const length = pendingTarget.length;
-    activePathRef.current = samples;
-    setFrozenActivePath(samples);
-    pendingPickupRef.current = pendingTarget.pickupLetter || null;
-    setPendingTarget(null);
-    setTarget({ x: pendingTarget.x, y: pendingTarget.y });
-    startMoveAlongCurve(samples, length);
-  };
-
-  const cancelMove = () => setPendingTarget(null);
-
-  const stopMove = () => {
-    if (currentAnim.current) currentAnim.current.stop();
-    if (progressListenerId.current && progressRef.current) {
-      progressRef.current.removeListener(progressListenerId.current);
-      progressListenerId.current = null;
-    }
-    cancelArrivalNotification();
-    pendingPickupRef.current = null;
-    const cx = animX.__getValue();
-    const cy = animY.__getValue();
-    finalizeArrival({ x: cx, y: cy });
-  };
-
-  const progressRef = useRef(null);
-  const progressListenerId = useRef(null);
-
-  const showTripSummary = (distancePx, durationMs, pickedUpItems = [], startDistancePx = 0) => {
-    setTripSummary({
-      distancePx: Math.max(0, Math.round(distancePx || 0)),
-      durationMs: Math.max(0, Math.round(durationMs || 0)),
-      pickedUpItems,
-      startDistancePx,
-    });
-  };
-
-  const dismissTripSummary = () => setTripSummary(null);
-
-  const startMoveAlongCurve = (samples, length) => {
-    if (!samples || samples.length < 2) return;
-    const { durationMs: baseDuration } = movementDurationAlongPath(samples);
-    const dur = baseDuration / speedMul;
-    moveTarget.current = samples[samples.length - 1];
-    moveBaseDuration.current = baseDuration;
-    tripStartedAtRef.current = Date.now();
-    tripTotalLengthRef.current = length;
-    setTripSummary(null);
-    setMoving(true);
-    const etaMs = Date.now() + dur;
-    setEta(etaMs);
-    setConsumedDist(0);
-    lastConsumedTick.current = 0;
-    announceMove({
-      from: { x: pos.x, y: pos.y },
-      to: samples[samples.length - 1],
-      startTs: Date.now(),
-      durationMs: dur,
-    });
-    const last = samples[samples.length - 1];
-    const destLabel = `${Math.round(last.x / TILE_PX)}, ${Math.round(last.y / TILE_PX)}`;
-    scheduleArrivalNotification(etaMs, destLabel);
-    const progress = new Animated.Value(0);
-    progressRef.current = progress;
-    const DOT_TICK = 26;
-    progressListenerId.current = progress.addListener(({ value }) => {
-      const p = sampleAt(samples, value);
-      animX.setValue(p.x);
-      animY.setValue(p.y);
-      if (value - lastConsumedTick.current >= DOT_TICK) {
-        lastConsumedTick.current = value;
-        setConsumedDist(value);
-      }
-    });
-    const anim = Animated.timing(progress, {
-      toValue: length, duration: dur, easing: Easing.linear, useNativeDriver: false,
-    });
-    currentAnim.current = anim;
-    anim.start(({ finished }) => {
-      if (progressListenerId.current && progressRef.current) {
-        progressRef.current.removeListener(progressListenerId.current);
-        progressListenerId.current = null;
-      }
-      if (!finished) return;
-      finalizeArrival(samples[samples.length - 1]);
-    });
-  };
-
-  const finalizeArrival = (final) => {
-    const tripDistancePx = tripTotalLengthRef.current || 0;
-    const tripDurationMs = tripStartedAtRef.current ? Date.now() - tripStartedAtRef.current : 0;
-
-    animX.setValue(final.x);
-    animY.setValue(final.y);
-    setPos({ x: final.x, y: final.y });
-    clearMyMove(final.x, final.y);
-    setMoving(false);
-    setEta(null);
-    setTarget(null);
-    activePathRef.current = null;
-    setFrozenActivePath(null);
-    setConsumedDist(0);
-    lastConsumedTick.current = 0;
-    currentAnim.current = null;
-    moveTarget.current = null;
-    tripStartedAtRef.current = null;
-    tripTotalLengthRef.current = 0;
-
-    const pickup = pendingPickupRef.current;
-    pendingPickupRef.current = null;
-
-    const pickedUpItems = [];
-
-    if (pickup && pickup.id) {
-      const stillThere = letters.some((l) => l.id === pickup.id);
-      if (stillThere) {
-        const newItem = {
-          id: pickup.id, authorId: pickup.authorId,
-          authorName: pickup.authorName, authorColor: pickup.authorColor,
-          text: pickup.text, pickedAt: Date.now(), unread: true,
-        };
-        addInventoryItem(newItem);
-        consumeLetter(pickup.id).catch(() => {});
-        pickedUpItems.push(newItem);
-      }
-    }
-
-    if (tripDistancePx > 0) {
-      setTotalDistancePx((prev) => {
-        const newTotal = prev + tripDistancePx;
-        AsyncStorage.setItem(TOTAL_DISTANCE_KEY, newTotal.toString()).catch(() => {});
-        const profileUpdate = updateMyProfile({ totalDistancePx: newTotal });
-        if (profileUpdate && typeof profileUpdate.catch === 'function') {
-          profileUpdate.catch(() => {});
-        }
-        if (tripDistancePx > 0 || tripDurationMs > 0) {
-          showTripSummary(tripDistancePx, tripDurationMs, pickedUpItems, prev);
-        }
-        return newTotal;
-      });
-    } else if (tripDurationMs > 0) {
-      showTripSummary(0, tripDurationMs, pickedUpItems, totalDistancePx);
-    }
   };
 
   const handleDebugGenerateMessage = async () => {

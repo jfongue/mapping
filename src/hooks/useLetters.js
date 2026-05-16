@@ -1,20 +1,18 @@
 // useLetters — gère les lettres au sol (subscribe Firebase) + écriture + lecture.
 //
-// Inputs : { profile, pos }
-//   profile : profil joueur (pour filter ses propres lettres, signer drops)
-//   pos     : position courante (pour drop letter à l'endroit du joueur)
+// Inputs : { profile }
 //
 // Retourne :
 //   letters, writeOpen, setWriteOpen, draft, setDraft,
 //   readingLetter, setReadingLetter,
-//   openWrite, sendLetter, closeReadingLetter,
+//   openWrite, sendLetter(dropPos), closeReadingLetter,
 //   findLetterNearPoint
 
 import { useCallback, useEffect, useState } from 'react';
 import { subscribeLetters, dropLetter, consumeLetter } from '../../firebase';
 import { LETTER_PICKUP_RADIUS } from '../constants';
 
-export function useLetters({ profile, pos }) {
+export function useLetters({ profile }) {
   const [letters, setLetters] = useState([]);
   const [writeOpen, setWriteOpen] = useState(false);
   const [draft, setDraft] = useState('');
@@ -51,9 +49,9 @@ export function useLetters({ profile, pos }) {
     setWriteOpen(true);
   }, []);
 
-  const sendLetter = useCallback(async () => {
+  const sendLetter = useCallback(async (dropPos) => {
     const text = (draft || '').trim();
-    if (!text || !profile) return;
+    if (!text || !profile || !dropPos) return;
     setWriteOpen(false);
     setDraft('');
     try {
@@ -61,12 +59,12 @@ export function useLetters({ profile, pos }) {
         authorId: profile.id,
         authorName: profile.name,
         authorColor: profile.color,
-        x: pos.x, y: pos.y, text,
+        x: dropPos.x, y: dropPos.y, text,
       });
     } catch (e) {
       if (__DEV__) console.warn('[letters] drop failed', e);
     }
-  }, [draft, profile, pos.x, pos.y]);
+  }, [draft, profile]);
 
   const closeReadingLetter = useCallback(async () => {
     const l = readingLetter;
