@@ -11,7 +11,7 @@ import {
   GestureHandlerRootView, PanGestureHandler, PinchGestureHandler,
 } from 'react-native-gesture-handler';
 import { StatusBar } from 'expo-status-bar';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { safeSet } from './src/storage';
 
 import {
   updateMyProfile, dropLetter,
@@ -121,7 +121,7 @@ export default function App() {
     getCharPos: () => ({ x: animX.__getValue(), y: animY.__getValue() }),
     onJoinedDistance: (totalPx) => {
       setTotalDistancePx(totalPx);
-      AsyncStorage.setItem(TOTAL_DISTANCE_KEY, totalPx.toString()).catch(() => {});
+      safeSet(TOTAL_DISTANCE_KEY, totalPx);
     },
   });
 

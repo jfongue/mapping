@@ -3,8 +3,8 @@
 // Retourne : { followed, toggle, isFollowed }
 
 import { useEffect, useState, useCallback } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { FOLLOWED_PLAYERS_KEY } from '../constants';
+import { safeGetJSON, safeSetJSON } from '../storage';
 
 export function useFollowedPlayers() {
   const [followed, setFollowed] = useState(() => new Set());
@@ -13,14 +13,9 @@ export function useFollowedPlayers() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        const raw = await AsyncStorage.getItem(FOLLOWED_PLAYERS_KEY);
-        if (cancelled || !raw) return;
-        const arr = JSON.parse(raw);
-        if (Array.isArray(arr)) setFollowed(new Set(arr));
-      } catch (e) {
-        if (__DEV__) console.warn('[followed] load failed', e);
-      }
+      const arr = await safeGetJSON(FOLLOWED_PLAYERS_KEY, []);
+      if (cancelled) return;
+      if (Array.isArray(arr)) setFollowed(new Set(arr));
     })();
     return () => { cancelled = true; };
   }, []);
@@ -30,10 +25,7 @@ export function useFollowedPlayers() {
       const next = new Set(prev);
       if (next.has(playerId)) next.delete(playerId);
       else next.add(playerId);
-      AsyncStorage.setItem(
-        FOLLOWED_PLAYERS_KEY,
-        JSON.stringify([...next])
-      ).catch((e) => __DEV__ && console.warn('[followed] save failed', e));
+      safeSetJSON(FOLLOWED_PLAYERS_KEY, [...next]);
       return next;
     });
   }, []);

@@ -6,9 +6,9 @@
 //     debugEnabled, setDebugEnabled }
 
 import { useCallback, useEffect, useState } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { PROFILE_KEY } from '../constants';
 import { generateProfile } from '../profile';
+import { safeGetJSON, safeSetJSON } from '../storage';
 
 const NAME_MAX_LEN = 16;
 
@@ -21,17 +21,10 @@ export function useProfile() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      let p = null;
-      try {
-        const raw = await AsyncStorage.getItem(PROFILE_KEY);
-        if (raw) p = JSON.parse(raw);
-      } catch (e) {
-        if (__DEV__) console.warn('[profile] load failed', e);
-      }
+      let p = await safeGetJSON(PROFILE_KEY, null);
       if (!p) {
         p = generateProfile();
-        AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(p))
-          .catch((e) => __DEV__ && console.warn('[profile] save failed', e));
+        safeSetJSON(PROFILE_KEY, p);
       }
       if (cancelled) return;
       setProfile(p);
@@ -43,8 +36,7 @@ export function useProfile() {
   const saveProfile = useCallback((patch) => {
     setProfile((prev) => {
       const updated = { ...prev, ...patch };
-      AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(updated))
-        .catch((e) => __DEV__ && console.warn('[profile] save failed', e));
+      safeSetJSON(PROFILE_KEY, updated);
       return updated;
     });
   }, []);

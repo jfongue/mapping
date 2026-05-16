@@ -4,8 +4,8 @@
 //              addItem, markRead, deleteItem }
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { INVENTORY_KEY } from '../constants';
+import { safeGetJSON, safeSetJSON } from '../storage';
 
 export function useInventory() {
   const [inventory, setInventory] = useState([]);
@@ -16,17 +16,10 @@ export function useInventory() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        const raw = await AsyncStorage.getItem(INVENTORY_KEY);
-        if (!cancelled && raw) {
-          const data = JSON.parse(raw);
-          if (Array.isArray(data)) setInventory(data);
-        }
-      } catch (e) {
-        if (__DEV__) console.warn('[inventory] load failed', e);
-      } finally {
-        if (!cancelled) setLoaded(true);
-      }
+      const data = await safeGetJSON(INVENTORY_KEY, []);
+      if (cancelled) return;
+      if (Array.isArray(data)) setInventory(data);
+      setLoaded(true);
     })();
     return () => { cancelled = true; };
   }, []);
@@ -34,8 +27,7 @@ export function useInventory() {
   // Persistance
   useEffect(() => {
     if (!loaded) return;
-    AsyncStorage.setItem(INVENTORY_KEY, JSON.stringify(inventory))
-      .catch((e) => __DEV__ && console.warn('[inventory] save failed', e));
+    safeSetJSON(INVENTORY_KEY, inventory);
   }, [inventory, loaded]);
 
   const addItem = useCallback((item) => {

@@ -19,10 +19,10 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, Easing } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   announceMove, clearMyMove, updateMyProfile, consumeLetter,
 } from '../../firebase';
+import { safeGetJSON, safeSet, safeSetJSON } from '../storage';
 import { TILE_PX } from '../tilemap';
 import { sampleAt } from '../smoothing';
 import { movementDurationAlongPath } from '../movement';
@@ -68,22 +68,15 @@ export function useMovement({ profile, speedMul, letters, addInventoryItem, hydr
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        const raw = await AsyncStorage.getItem(SAVE_KEY);
-        if (!cancelled && raw) {
-          const data = JSON.parse(raw);
-          if (data?.pos) {
-            const safe = safePixelPos(data.pos.x, data.pos.y);
-            setPos(safe);
-            animX.setValue(safe.x);
-            animY.setValue(safe.y);
-          }
-        }
-      } catch (e) {
-        if (__DEV__) console.warn('[movement] load pos failed', e);
-      } finally {
-        if (!cancelled) setLoaded(true);
+      const data = await safeGetJSON(SAVE_KEY, null);
+      if (cancelled) return;
+      if (data?.pos) {
+        const safe = safePixelPos(data.pos.x, data.pos.y);
+        setPos(safe);
+        animX.setValue(safe.x);
+        animY.setValue(safe.y);
       }
+      setLoaded(true);
     })();
     return () => { cancelled = true; };
   }, []);
@@ -91,8 +84,7 @@ export function useMovement({ profile, speedMul, letters, addInventoryItem, hydr
   // Persist pos
   useEffect(() => {
     if (!loaded) return;
-    AsyncStorage.setItem(SAVE_KEY, JSON.stringify({ pos }))
-      .catch((e) => __DEV__ && console.warn('[movement] save pos failed', e));
+    safeSetJSON(SAVE_KEY, { pos });
   }, [loaded, pos]);
 
   // Hydrate total distance depuis multiplayer
@@ -213,7 +205,7 @@ export function useMovement({ profile, speedMul, letters, addInventoryItem, hydr
     if (tripDistancePx > 0) {
       setTotalDistancePx((prev) => {
         const newTotal = prev + tripDistancePx;
-        AsyncStorage.setItem(TOTAL_DISTANCE_KEY, newTotal.toString()).catch(() => {});
+        safeSet(TOTAL_DISTANCE_KEY, newTotal);
         const profileUpdate = updateMyProfile({ totalDistancePx: newTotal });
         if (profileUpdate && typeof profileUpdate.catch === 'function') {
           profileUpdate.catch(() => {});

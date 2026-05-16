@@ -8,9 +8,9 @@
 //   revealAt: (px, py) => void — à appeler manuellement si besoin
 
 import { useEffect, useRef, useState } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { FOG_KEY, FOG_REVEAL_RADIUS } from '../constants';
 import { getTilesInRadius } from '../mapUtils';
+import { safeGetJSON, safeSetJSON } from '../storage';
 
 const SAVE_DEBOUNCE_MS = 3000;
 const REVEAL_INTERVAL_MS = 500;
@@ -24,17 +24,12 @@ export function useFogOfWar({ animX, animY, moving, loaded }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        const raw = await AsyncStorage.getItem(FOG_KEY);
-        if (cancelled || !raw) return;
-        const arr = JSON.parse(raw);
-        if (Array.isArray(arr)) {
-          const s = new Set(arr);
-          exploredRef.current = s;
-          setExplored(s);
-        }
-      } catch (e) {
-        if (__DEV__) console.warn('[fog] load failed', e);
+      const arr = await safeGetJSON(FOG_KEY, []);
+      if (cancelled) return;
+      if (Array.isArray(arr)) {
+        const s = new Set(arr);
+        exploredRef.current = s;
+        setExplored(s);
       }
     })();
     return () => { cancelled = true; };
@@ -53,10 +48,7 @@ export function useFogOfWar({ animX, animY, moving, loaded }) {
     setExplored(new Set(exploredRef.current));
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      AsyncStorage.setItem(
-        FOG_KEY,
-        JSON.stringify([...exploredRef.current])
-      ).catch((e) => __DEV__ && console.warn('[fog] save failed', e));
+      safeSetJSON(FOG_KEY, [...exploredRef.current]);
     }, SAVE_DEBOUNCE_MS);
   };
 
@@ -82,10 +74,7 @@ export function useFogOfWar({ animX, animY, moving, loaded }) {
     return () => {
       if (saveTimer.current) {
         clearTimeout(saveTimer.current);
-        AsyncStorage.setItem(
-          FOG_KEY,
-          JSON.stringify([...exploredRef.current])
-        ).catch(() => {});
+        safeSetJSON(FOG_KEY, [...exploredRef.current]);
       }
     };
   }, []);
