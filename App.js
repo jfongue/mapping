@@ -14,17 +14,15 @@ import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import {
-  joinMultiplayer, announceMove, clearMyMove,
-  subscribePlayers, leaveMultiplayer, updateMyProfile,
+  announceMove, clearMyMove, updateMyProfile,
   dropLetter, consumeLetter,
 } from './firebase';
 
 import {
   MIN_SCALE, MAX_SCALE,
-  ONLINE_THRESHOLD_MS, TAP_PLAYER_RADIUS,
   TOP_SAFE, SAVE_KEY,
   TOTAL_DISTANCE_KEY,
-  PLAYER_NEAR_RADIUS, RECENTER_HIDE_RADIUS, FOG_REVEAL_RADIUS,
+  RECENTER_HIDE_RADIUS, FOG_REVEAL_RADIUS,
   WATER_COLOR,
 } from './src/constants';
 import { THEME } from './src/theme';
@@ -50,14 +48,14 @@ import { useBoostSpeed } from './src/hooks/useBoostSpeed';
 import { useSpriteAnims } from './src/hooks/useSpriteAnims';
 import { useProfile } from './src/hooks/useProfile';
 import { useLetters } from './src/hooks/useLetters';
+import { useMultiplayer } from './src/hooks/useMultiplayer';
 
 import { safePixelPos, buildStraightPath, findRandomWalkableTileNear } from './src/mapUtils';
 
 const MAP_SIZE = MAP_W_PX;
 const SPAWN = { x: (MAP_W / 2) * TILE_PX, y: (MAP_H / 2) * TILE_PX };
 import { formatMeters, formatDuration } from './src/format';
-import { movementDurationAlongPath, movementDuration, lerpFromTarget } from './src/movement';
-import { isPlayerOnline } from './src/profile';
+import { movementDurationAlongPath, movementDuration } from './src/movement';
 
 import SleepyZzz from './components/SleepyZzz';
 import SmoothEdgeArrow from './components/SmoothEdgeArrow';
@@ -114,10 +112,7 @@ export default function App() {
     saveProfile: persistProfile,
     debugEnabled, setDebugEnabled,
   } = useProfile();
-  const [otherPlayers, setOtherPlayers] = useState([]);
-  const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const playerAnims = useRef(new Map()).current;
 
   const [pendingTarget, setPendingTarget] = useState(null);
 
@@ -142,6 +137,22 @@ export default function App() {
     deleteItem: deleteInventoryItem,
   } = useInventory();
 
+  const [totalDistancePx, setTotalDistancePx] = useState(0);
+
+  const {
+    otherPlayers, playerAnims,
+    selectedPlayer, setSelectedPlayer,
+    isOnline, computePlayerPos,
+    findTappedPlayer, findPlayerNearPoint,
+  } = useMultiplayer({
+    profile,
+    getCharPos: () => ({ x: animX.__getValue(), y: animY.__getValue() }),
+    onJoinedDistance: (totalPx) => {
+      setTotalDistancePx(totalPx);
+      AsyncStorage.setItem(TOTAL_DISTANCE_KEY, totalPx.toString()).catch(() => {});
+    },
+  });
+
   const activePathRef = useRef(null);
   const [frozenActivePath, setFrozenActivePath] = useState(null);
   const [consumedDist, setConsumedDist] = useState(0);
@@ -150,9 +161,6 @@ export default function App() {
   const tripTotalLengthRef = useRef(0);
   const [tripSummary, setTripSummary] = useState(null);
   const tripStartedAtRef = useRef(null);
-  const [totalDistancePx, setTotalDistancePx] = useState(0);
-
-  const globalNowRef = useRef(Date.now());
 
   const dx = useRef(new Animated.Value(0)).current;
   const dy = useRef(new Animated.Value(0)).current;
@@ -246,155 +254,6 @@ export default function App() {
     if (!loaded) return;
     AsyncStorage.setItem(SAVE_KEY, JSON.stringify({ pos })).catch(() => {});
   }, [loaded, pos]);
-
-  useEffect(() => {
-    if (!profile) return;
-    let unsub = null;
-    let alive = true;
-    (async () => {
-      try {
-        const result = await joinMultiplayer({
-          playerId: profile.id, name: profile.name, color: profile.color,
-          outfit: profile.outfit, skin: profile.skin,
-          hair: profile.hair, hat: profile.hat,
-          x: animX.__getValue(), y: animY.__getValue(),
-        });
-        if (!alive) return;
-        if (result && typeof result.totalDistancePx === 'number' && result.totalDistancePx > 0) {
-          setTotalDistancePx(result.totalDistancePx);
-          AsyncStorage.setItem(TOTAL_DISTANCE_KEY, result.totalDistancePx.toString()).catch(() => {});
-        }
-        unsub = subscribePlayers((list) => setOtherPlayers(list));
-      } catch (e) {
-        console.warn('multi join failed', e);
-      }
-    })();
-    return () => {
-      alive = false;
-      if (unsub) unsub();
-      leaveMultiplayer().catch(() => {});
-    };
-  }, [profile?.id]);
-
-  useEffect(() => {
-    const seen = new Set();
-    for (const p of otherPlayers) {
-      if (typeof p.x !== 'number' || typeof p.y !== 'number') continue;
-      seen.add(p.id);
-
-      let entry = playerAnims.get(p.id);
-      let isNew = false;
-      if (!entry) {
-        isNew = true;
-        const lerped = p.target ? lerpFromTarget(p.target) : null;
-        const startX = lerped?.x ?? p.x;
-        const startY = lerped?.y ?? p.y;
-        entry = {
-          x: new Animated.Value(startX),
-          y: new Animated.Value(startY),
-          anim: null,
-          lastKey: '',
-        };
-        playerAnims.set(p.id, entry);
-      }
-
-      const key = p.target
-        ? `${p.target.startTs}-${p.target.toX}-${p.target.toY}`
-        : `static-${p.x}-${p.y}`;
-      if (!isNew && key === entry.lastKey) continue;
-      entry.lastKey = key;
-      if (entry.anim) entry.anim.stop();
-
-      if (p.target) {
-        const t = p.target;
-        const fromTx = Math.floor(t.fromX / TILE_PX);
-        const fromTy = Math.floor(t.fromY / TILE_PX);
-        const toTx = Math.floor(t.toX / TILE_PX);
-        const toTy = Math.floor(t.toY / TILE_PX);
-        const cellPath = findPath(TILES_DATA, MAP_W, MAP_H, fromTx, fromTy, toTx, toTy);
-
-        let samples;
-        if (cellPath && cellPath.length >= 2) {
-          samples = cellPath.map((c) => ({
-            x: c.x * TILE_PX + TILE_PX / 2,
-            y: c.y * TILE_PX + TILE_PX / 2,
-          }));
-          samples[0] = { x: t.fromX, y: t.fromY };
-          samples[samples.length - 1] = { x: t.toX, y: t.toY };
-        } else {
-          samples = [
-            { x: t.fromX, y: t.fromY },
-            { x: t.toX, y: t.toY },
-          ];
-        }
-
-        const cum = [0];
-        let total = 0;
-        for (let i = 1; i < samples.length; i++) {
-          total += Math.hypot(samples[i].x - samples[i - 1].x, samples[i].y - samples[i - 1].y);
-          cum.push(total);
-        }
-
-        const elapsed = Math.max(0, Date.now() - t.startTs);
-        const frac = total > 0 ? Math.min(1, elapsed / t.durationMs) : 1;
-
-        if (frac >= 1) {
-          entry.x.setValue(t.toX);
-          entry.y.setValue(t.toY);
-          entry.anim = null;
-        } else {
-          const elapsedDist = frac * total;
-          let seg = 1;
-          while (seg < cum.length && cum[seg] < elapsedDist) seg++;
-          const a = samples[seg - 1];
-          const b = samples[seg];
-          const segLen = cum[seg] - cum[seg - 1];
-          const tInSeg = segLen > 0 ? (elapsedDist - cum[seg - 1]) / segLen : 0;
-          const startX = a.x + (b.x - a.x) * tInSeg;
-          const startY = a.y + (b.y - a.y) * tInSeg;
-          entry.x.setValue(startX);
-          entry.y.setValue(startY);
-
-          const steps = [];
-          const firstSegRemaining = segLen * (1 - tInSeg);
-          if (firstSegRemaining > 0) {
-            steps.push({ x: b.x, y: b.y, dist: firstSegRemaining });
-          }
-          for (let i = seg + 1; i < samples.length; i++) {
-            steps.push({ x: samples[i].x, y: samples[i].y, dist: cum[i] - cum[i - 1] });
-          }
-
-          const remainingMs = Math.max(50, t.durationMs - elapsed);
-          const animations = steps.map((s) => {
-            const dur = total > 0 ? Math.max(16, (s.dist / total) * t.durationMs) : remainingMs;
-            return Animated.parallel([
-              Animated.timing(entry.x, { toValue: s.x, duration: dur, easing: Easing.linear, useNativeDriver: true }),
-              Animated.timing(entry.y, { toValue: s.y, duration: dur, easing: Easing.linear, useNativeDriver: true }),
-            ]);
-          });
-          const seq = animations.length === 1 ? animations[0] : Animated.sequence(animations);
-          entry.anim = seq;
-          seq.start();
-        }
-      } else {
-        entry.x.setValue(p.x);
-        entry.y.setValue(p.y);
-        entry.anim = null;
-      }
-    }
-    for (const id of Array.from(playerAnims.keys())) {
-      if (!seen.has(id)) {
-        const e = playerAnims.get(id);
-        if (e?.anim) e.anim.stop();
-        playerAnims.delete(id);
-      }
-    }
-  }, [otherPlayers]);
-
-  useEffect(() => {
-    const id = setInterval(() => { globalNowRef.current = Date.now(); }, 5000);
-    return () => clearInterval(id);
-  }, []);
 
   // Visibilité bouton recenter : on recalcule sur chaque tick d'Animated
   // (pan, pinch, mouvement) au lieu d'un polling 150ms permanent.
@@ -550,34 +409,6 @@ export default function App() {
   const onCanvasLayout = (e) => {
     const { width, height } = e.nativeEvent.layout;
     setViewport({ w: width, h: height });
-  };
-
-  const isOnline = (p) => isPlayerOnline(p, globalNowRef.current, ONLINE_THRESHOLD_MS);
-
-  const computePlayerPos = (p) => {
-    const e = playerAnims.get(p.id);
-    if (e) return { x: e.x.__getValue(), y: e.y.__getValue() };
-    return { x: p.x, y: p.y };
-  };
-
-  const findTappedPlayer = (tap) => {
-    let best = null, bestD = TAP_PLAYER_RADIUS;
-    for (const p of otherPlayers) {
-      const pp = computePlayerPos(p);
-      const d = Math.hypot(pp.x - tap.x, pp.y - tap.y);
-      if (d < bestD) { bestD = d; best = p; }
-    }
-    return best;
-  };
-
-  const findPlayerNearPoint = (px, py, radius = PLAYER_NEAR_RADIUS) => {
-    let best = null, bestD = radius;
-    for (const p of otherPlayers) {
-      const pp = computePlayerPos(p);
-      const d = Math.hypot(pp.x - px, pp.y - py);
-      if (d < bestD) { bestD = d; best = p; }
-    }
-    return best;
   };
 
   const handleTap = (evt) => {
