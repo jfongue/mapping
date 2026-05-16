@@ -4,11 +4,11 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  StyleSheet, View, Text, Dimensions, Animated, Easing,
+  StyleSheet, View, Text, Animated, Easing,
   TouchableWithoutFeedback, TouchableOpacity, Modal, ScrollView,
 } from 'react-native';
 import {
-  GestureHandlerRootView, PanGestureHandler, PinchGestureHandler, State,
+  GestureHandlerRootView, PanGestureHandler, PinchGestureHandler,
 } from 'react-native-gesture-handler';
 import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -19,10 +19,9 @@ import {
 } from './firebase';
 
 import {
-  MIN_SCALE, MAX_SCALE,
   TOP_SAFE, SAVE_KEY,
   TOTAL_DISTANCE_KEY,
-  RECENTER_HIDE_RADIUS, FOG_REVEAL_RADIUS,
+  FOG_REVEAL_RADIUS,
   WATER_COLOR,
 } from './src/constants';
 import { THEME } from './src/theme';
@@ -49,10 +48,10 @@ import { useSpriteAnims } from './src/hooks/useSpriteAnims';
 import { useProfile } from './src/hooks/useProfile';
 import { useLetters } from './src/hooks/useLetters';
 import { useMultiplayer } from './src/hooks/useMultiplayer';
+import { useCamera } from './src/hooks/useCamera';
 
 import { safePixelPos, buildStraightPath, findRandomWalkableTileNear } from './src/mapUtils';
 
-const MAP_SIZE = MAP_W_PX;
 const SPAWN = { x: (MAP_W / 2) * TILE_PX, y: (MAP_H / 2) * TILE_PX };
 import { formatMeters, formatDuration } from './src/format';
 import { movementDurationAlongPath, movementDuration } from './src/movement';
@@ -69,29 +68,7 @@ import { AdventurerSprite } from './components/Adventurer';
 import { ScrollText, Settings, Crosshair, Backpack, Heart } from 'lucide-react-native';
 import { DEBUG_MESSAGES, DEBUG_MESSAGE_AUTHORS } from './src/debugMessages';
 
-const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
-const INIT_X = SCREEN_W / 2 - MAP_SIZE / 2;
-const INIT_Y = SCREEN_H / 2 - MAP_SIZE / 2;
-
-const PAN_THRESHOLD_PX = 5;
-
 export default function App() {
-  const [viewport, setViewport] = useState({ w: SCREEN_W, h: SCREEN_H });
-
-  const tx = useRef(new Animated.Value(INIT_X)).current;
-  const ty = useRef(new Animated.Value(INIT_Y)).current;
-  const lastOffset = useRef({ x: INIT_X, y: INIT_Y });
-
-  const baseScale = useRef(new Animated.Value(1)).current;
-  const pinchScale = useRef(new Animated.Value(1)).current;
-  const lastScale = useRef(1);
-  const pinchStartScale = useRef(1);
-
-  const userHasPanned = useRef(false);
-  const [showRecenterBtn, setShowRecenterBtn] = useState(false);
-  const followRafId = useRef(null);
-  const isInitialCenter = useRef(false);
-
   const [pos, setPos] = useState(SPAWN);
   const [moving, setMoving] = useState(false);
   const [target, setTarget] = useState(null);
@@ -162,13 +139,6 @@ export default function App() {
   const [tripSummary, setTripSummary] = useState(null);
   const tripStartedAtRef = useRef(null);
 
-  const dx = useRef(new Animated.Value(0)).current;
-  const dy = useRef(new Animated.Value(0)).current;
-
-  const totalX = Animated.add(tx, dx);
-  const totalY = Animated.add(ty, dy);
-
-  const pinchListenerId = useRef(null);
 
   // --- Brouillard de guerre ---
   // Position du personnage en JS (pas Animated.Value) pour le FogLayer
@@ -179,54 +149,18 @@ export default function App() {
   const { followed: followedPlayers, toggle: toggleFollow } = useFollowedPlayers();
   const [playersListOpen, setPlayersListOpen] = useState(false);
 
-  const computeCenteredOffset = (charX, charY, vw, vh, s) => {
-    const cx = MAP_W_PX / 2;
-    const cy = MAP_H_PX / 2;
-    return {
-      x: vw / 2 - s * charX - cx * (1 - s),
-      y: vh / 2 - s * charY - cy * (1 - s),
-    };
-  };
-
-  const markUserHasPanned = () => {
-    if (userHasPanned.current) return;
-    userHasPanned.current = true;
-    stopFollowLoop();
-  };
-
-  const stopFollowLoop = () => {
-    if (followRafId.current) {
-      cancelAnimationFrame(followRafId.current);
-      followRafId.current = null;
-    }
-  };
-
-  const startFollowLoop = () => {
-    stopFollowLoop();
-    const loop = () => {
-      if (userHasPanned.current) return;
-      const vw = viewport.w || SCREEN_W;
-      const vh = viewport.h || SCREEN_H;
-      const s = lastScale.current;
-      const charX = animX.__getValue();
-      const charY = animY.__getValue();
-      const { x: newX, y: newY } = computeCenteredOffset(charX, charY, vw, vh, s);
-      tx.setValue(newX);
-      ty.setValue(newY);
-      lastOffset.current = { x: newX, y: newY };
-      followRafId.current = requestAnimationFrame(loop);
-    };
-    followRafId.current = requestAnimationFrame(loop);
-  };
-
-  useEffect(() => {
-    if (moving && !userHasPanned.current) {
-      startFollowLoop();
-    } else {
-      stopFollowLoop();
-    }
-    return stopFollowLoop;
-  }, [moving]);
+  // --- Caméra (pan / pinch / recenter / follow loop) ---
+  const {
+    tx, ty, dx, dy, baseScale, pinchScale, totalX, totalY,
+    viewport, onCanvasLayout,
+    onPanGesture, onPanStateChange, onPinchGesture, onPinchStateChange,
+    recenter, centerOnPoint, markUserHasPanned,
+    showRecenterBtn,
+  } = useCamera({
+    getCharPos: () => ({ x: animX.__getValue(), y: animY.__getValue() }),
+    moving,
+    loaded,
+  });
 
   useEffect(() => {
     requestNotificationPermissions();
@@ -255,63 +189,6 @@ export default function App() {
     AsyncStorage.setItem(SAVE_KEY, JSON.stringify({ pos })).catch(() => {});
   }, [loaded, pos]);
 
-  // Visibilité bouton recenter : on recalcule sur chaque tick d'Animated
-  // (pan, pinch, mouvement) au lieu d'un polling 150ms permanent.
-  useEffect(() => {
-    const vw = viewport.w || SCREEN_W;
-    const vh = viewport.h || SCREEN_H;
-    if (!vw || !vh) return;
-    const cx = MAP_W_PX / 2;
-    const cy = MAP_H_PX / 2;
-    let pending = false;
-    const recompute = () => {
-      pending = false;
-      const s = lastScale.current;
-      const charX = animX.__getValue();
-      const charY = animY.__getValue();
-      const offX = lastOffset.current.x + dx.__getValue();
-      const offY = lastOffset.current.y + dy.__getValue();
-      const screenX = offX + s * charX + cx * (1 - s);
-      const screenY = offY + s * charY + cy * (1 - s);
-      const dist = Math.hypot(screenX - vw / 2, screenY - vh / 2);
-      const shouldShow = dist > RECENTER_HIDE_RADIUS;
-      setShowRecenterBtn((prev) => (prev === shouldShow ? prev : shouldShow));
-    };
-    const schedule = () => {
-      if (pending) return;
-      pending = true;
-      requestAnimationFrame(recompute);
-    };
-    // Recompute initial puis sur chaque changement d'animX/animY/dx/dy
-    schedule();
-    const ids = [
-      animX.addListener(schedule),
-      animY.addListener(schedule),
-      dx.addListener(schedule),
-      dy.addListener(schedule),
-    ];
-    return () => {
-      animX.removeListener(ids[0]);
-      animY.removeListener(ids[1]);
-      dx.removeListener(ids[2]);
-      dy.removeListener(ids[3]);
-    };
-  }, [viewport.w, viewport.h]);
-
-  useEffect(() => {
-    if (isInitialCenter.current || !loaded || viewport.w === 0) return;
-    const s = lastScale.current;
-    const vw = viewport.w;
-    const vh = viewport.h;
-    const charX = animX.__getValue();
-    const charY = animY.__getValue();
-    const { x: newX, y: newY } = computeCenteredOffset(charX, charY, vw, vh, s);
-    tx.setValue(newX);
-    ty.setValue(newY);
-    lastOffset.current = { x: newX, y: newY };
-    isInitialCenter.current = true;
-  }, [loaded, viewport.w, viewport.h]);
-
   useEffect(() => {
     if (!moving || !moveTarget.current) return;
     const samples = activePathRef.current;
@@ -330,86 +207,6 @@ export default function App() {
     activePathRef.current = newSamples;
     startMoveAlongCurve(newSamples, length);
   }, [speedMul]);
-
-  const onPanGesture = Animated.event(
-    [{ nativeEvent: { translationX: dx, translationY: dy } }],
-    { useNativeDriver: true }
-  );
-
-  const onPanStateChange = (e) => {
-    const { state, translationX, translationY } = e.nativeEvent;
-    if (state === State.ACTIVE || state === State.END || state === State.CANCELLED) {
-      const dist = Math.sqrt(translationX * translationX + translationY * translationY);
-      if (dist >= PAN_THRESHOLD_PX) markUserHasPanned();
-    }
-    if (state === State.END || state === State.CANCELLED) {
-      lastOffset.current = {
-        x: lastOffset.current.x + translationX,
-        y: lastOffset.current.y + translationY,
-      };
-      tx.setValue(lastOffset.current.x);
-      ty.setValue(lastOffset.current.y);
-      dx.setValue(0);
-      dy.setValue(0);
-    }
-  };
-
-  const onPinchGesture = Animated.event(
-    [{ nativeEvent: { scale: pinchScale } }],
-    { useNativeDriver: true }
-  );
-
-  const pinchAnchor = useRef({ mapX: 0, mapY: 0, focalX: 0, focalY: 0 });
-
-  const onPinchStateChange = (e) => {
-    const { state, scale: gestureScale, focalX, focalY } = e.nativeEvent;
-    if (state === State.BEGAN) {
-      markUserHasPanned();
-      pinchStartScale.current = lastScale.current;
-      const s = lastScale.current;
-      const cx = MAP_W_PX / 2;
-      const cy = MAP_H_PX / 2;
-      const focX = focalX ?? (viewport.w || SCREEN_W) / 2;
-      const focY = focalY ?? (viewport.h || SCREEN_H) / 2;
-      pinchAnchor.current = {
-        mapX: (focX - lastOffset.current.x - cx * (1 - s)) / s,
-        mapY: (focY - lastOffset.current.y - cy * (1 - s)) / s,
-        focalX: focX,
-        focalY: focY,
-      };
-      if (pinchListenerId.current !== null) pinchScale.removeListener(pinchListenerId.current);
-      pinchListenerId.current = pinchScale.addListener(({ value: liveGestureScale }) => {
-        const liveScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, pinchStartScale.current * liveGestureScale));
-        const cx2 = MAP_W_PX / 2;
-        const cy2 = MAP_H_PX / 2;
-        const { mapX, mapY, focalX: fX, focalY: fY } = pinchAnchor.current;
-        const newTx = fX - cx2 * (1 - liveScale) - mapX * liveScale;
-        const newTy = fY - cy2 * (1 - liveScale) - mapY * liveScale;
-        baseScale.setValue(liveScale);
-        tx.setValue(newTx);
-        ty.setValue(newTy);
-        lastOffset.current = { x: newTx, y: newTy };
-      });
-    }
-    if (state === State.END || state === State.CANCELLED) {
-      if (pinchListenerId.current !== null) {
-        pinchScale.removeListener(pinchListenerId.current);
-        pinchListenerId.current = null;
-      }
-      let next = pinchStartScale.current * gestureScale;
-      next = Math.max(MIN_SCALE, Math.min(MAX_SCALE, next));
-      lastScale.current = next;
-      pinchScale.setValue(1);
-      baseScale.setValue(next);
-      tx.setValue(lastOffset.current.x);
-      ty.setValue(lastOffset.current.y);
-    }
-  };
-
-  const onCanvasLayout = (e) => {
-    const { width, height } = e.nativeEvent.layout;
-    setViewport({ w: width, h: height });
-  };
 
   const handleTap = (evt) => {
     const t = { x: evt.nativeEvent.locationX, y: evt.nativeEvent.locationY };
@@ -588,54 +385,6 @@ export default function App() {
     } else if (tripDurationMs > 0) {
       showTripSummary(0, tripDurationMs, pickedUpItems, totalDistancePx);
     }
-  };
-
-  const recenter = () => {
-    const vw = viewport.w || SCREEN_W;
-    const vh = viewport.h || SCREEN_H;
-    const s = lastScale.current;
-    const charX = animX.__getValue();
-    const charY = animY.__getValue();
-    const curOffX = lastOffset.current.x + dx.__getValue();
-    const curOffY = lastOffset.current.y + dy.__getValue();
-    const { x: targetX, y: targetY } = computeCenteredOffset(charX, charY, vw, vh, s);
-    lastOffset.current = { x: curOffX, y: curOffY };
-    dx.setValue(0);
-    dy.setValue(0);
-    tx.setValue(curOffX);
-    ty.setValue(curOffY);
-    Animated.parallel([
-      Animated.timing(tx, { toValue: targetX, duration: 350, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-      Animated.timing(ty, { toValue: targetY, duration: 350, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-    ]).start(() => {
-      lastOffset.current = { x: targetX, y: targetY };
-      userHasPanned.current = false;
-      if (moving) startFollowLoop();
-    });
-  };
-
-  const centerOnPoint = (mapX, mapY) => {
-    const vw = viewport.w || SCREEN_W;
-    const vh = viewport.h || SCREEN_H;
-    const s = lastScale.current;
-    const cx = MAP_W_PX / 2;
-    const cy = MAP_H_PX / 2;
-    const targetX = vw / 2 - s * mapX - cx * (1 - s);
-    const targetY = vh / 2 - s * mapY - cy * (1 - s);
-    const curOffX = lastOffset.current.x + dx.__getValue();
-    const curOffY = lastOffset.current.y + dy.__getValue();
-    lastOffset.current = { x: curOffX, y: curOffY };
-    dx.setValue(0);
-    dy.setValue(0);
-    tx.setValue(curOffX);
-    ty.setValue(curOffY);
-    userHasPanned.current = true;
-    Animated.parallel([
-      Animated.timing(tx, { toValue: targetX, duration: 450, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-      Animated.timing(ty, { toValue: targetY, duration: 450, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-    ]).start(() => {
-      lastOffset.current = { x: targetX, y: targetY };
-    });
   };
 
   const handleDebugGenerateMessage = async () => {
