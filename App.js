@@ -2,7 +2,7 @@
 // Logique pure dans /src, composants UI dans /components.
 // App.js orchestre uniquement : état React, gestes, animations natives.
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import {
   StyleSheet, View, Text, Dimensions, Animated, Easing,
   TouchableWithoutFeedback, TouchableOpacity, Modal, ScrollView,
@@ -38,11 +38,15 @@ import {
 const INVENTORY_KEY = '@treasureProto.inventory.v1';
 const FOLLOWED_PLAYERS_KEY = '@treasureProto.followedPlayers.v1';
 const TOTAL_DISTANCE_KEY = 'TOTAL_DISTANCE_KEY';
+const COLLECTED_TREASURES_KEY = '@treasureProto.treasures.v1';
+const TREASURE_PICKUP_RADIUS = 110;
 const LETTER_PICKUP_RADIUS = 130;
 const PLAYER_NEAR_RADIUS = 130;
 const RECENTER_HIDE_RADIUS = 90;
 
-import { TILES_DATA, MAP_W, MAP_H, TILE_PX, WALKABLE, findPath } from './src/tilemap';
+import { TILES_DATA, MAP_W, MAP_H, TILE_PX, WALKABLE, SELECTABLE, findPath } from './src/tilemap';
+import { generateTreasures, treasuresWithin, sumTreasureXp, TREASURE_TIERS } from './src/treasures';
+import TreasureChest from './components/TreasureChest';
 import { sampleAt } from './src/smoothing';
 import TileLayer, { MAP_W_PX, MAP_H_PX } from './components/TileLayer';
 import DottedTrail from './components/DottedTrail';
@@ -280,6 +284,43 @@ export default function App() {
   useEffect(() => {
     if (loaded) revealTilesAround(animX.__getValue(), animY.__getValue());
   }, [loaded]);
+
+  // --- Trésors ---
+  // Set déterministe de coffres, généré une seule fois depuis la tilemap.
+  const treasures = useMemo(
+    () => generateTreasures({
+      tiles: TILES_DATA, W: MAP_W, H: MAP_H, tilePx: TILE_PX,
+      selectable: SELECTABLE, count: 60, minDistTiles: 7,
+    }),
+    []
+  );
+  const [collectedTreasures, setCollectedTreasures] = useState(() => new Set());
+  const collectedRef = useRef(new Set());
+
+  // Charge les coffres déjà collectés
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(COLLECTED_TREASURES_KEY);
+        if (raw) {
+          const arr = JSON.parse(raw);
+          if (Array.isArray(arr)) {
+            const s = new Set(arr);
+            collectedRef.current = s;
+            setCollectedTreasures(s);
+          }
+        }
+      } catch (e) {}
+    })();
+  }, []);
+
+  const markTreasuresCollected = (ids) => {
+    if (!ids || ids.length === 0) return;
+    for (const id of ids) collectedRef.current.add(id);
+    const snap = new Set(collectedRef.current);
+    setCollectedTreasures(snap);
+    AsyncStorage.setItem(COLLECTED_TREASURES_KEY, JSON.stringify([...snap])).catch(() => {});
+  };
 
   // --- Suivi de joueurs ---
   const [followedPlayers, setFollowedPlayers] = useState(new Set());
@@ -769,6 +810,17 @@ export default function App() {
     return best;
   };
 
+  const findTreasureNearPoint = (px, py, radius = TREASURE_PICKUP_RADIUS) => {
+    let best = null, bestD = radius;
+    for (const t of treasures) {
+      if (collectedTreasures.has(t.id)) continue;
+      if (!explored.has(`${t.tx},${t.ty}`)) continue;
+      const d = Math.hypot(t.x - px, t.y - py);
+      if (d < bestD) { bestD = d; best = t; }
+    }
+    return best;
+  };
+
   const findPlayerNearPoint = (px, py, radius = PLAYER_NEAR_RADIUS) => {
     let best = null, bestD = radius;
     for (const p of otherPlayers) {
@@ -790,8 +842,10 @@ export default function App() {
       return;
     }
     const nearLetter = findLetterNearPoint(t.x, t.y, 40);
+    const nearChestTap = nearLetter ? null : findTreasureNearPoint(t.x, t.y, 40);
     let goalX = t.x, goalY = t.y;
     if (nearLetter) { goalX = nearLetter.x; goalY = nearLetter.y; }
+    else if (nearChestTap) { goalX = nearChestTap.x; goalY = nearChestTap.y; }
     const sx = Math.floor(pos.x / TILE_PX);
     const sy = Math.floor(pos.y / TILE_PX);
     const tx2 = Math.floor(goalX / TILE_PX);
@@ -802,10 +856,12 @@ export default function App() {
     const finalPx = samples[samples.length - 1];
     const pickupLetter = nearLetter || findLetterNearPoint(finalPx.x, finalPx.y);
     const nearPlayer = pickupLetter ? null : findPlayerNearPoint(finalPx.x, finalPx.y);
+    const nearTreasure = (pickupLetter || nearPlayer) ? null : findTreasureNearPoint(finalPx.x, finalPx.y);
     setPendingTarget({
       ...finalPx, samples, length,
       pickupLetter: pickupLetter || null,
       nearPlayer: nearPlayer || null,
+      nearTreasure: nearTreasure || null,
     });
   };
 
@@ -862,12 +918,14 @@ export default function App() {
   const progressRef = useRef(null);
   const progressListenerId = useRef(null);
 
-  const showTripSummary = (distancePx, durationMs, pickedUpItems = [], startDistancePx = 0) => {
+  const showTripSummary = (distancePx, durationMs, pickedUpItems = [], startDistancePx = 0, foundTreasures = [], bonusXp = 0) => {
     setTripSummary({
       distancePx: Math.max(0, Math.round(distancePx || 0)),
       durationMs: Math.max(0, Math.round(durationMs || 0)),
       pickedUpItems,
       startDistancePx,
+      foundTreasures: foundTreasures || [],
+      bonusXp: Math.max(0, Math.round(bonusXp || 0)),
     });
   };
 
@@ -947,6 +1005,15 @@ export default function App() {
 
     const pickedUpItems = [];
 
+    // --- Collecte des coffres à proximité du point d'arrivée ---
+    const foundTreasures = treasuresWithin(
+      treasures, final.x, final.y, TREASURE_PICKUP_RADIUS, collectedRef.current
+    );
+    const treasureXp = sumTreasureXp(foundTreasures);
+    if (foundTreasures.length > 0) {
+      markTreasuresCollected(foundTreasures.map((t) => t.id));
+    }
+
     if (pickup && pickup.id) {
       const stillThere = letters.some((l) => l.id === pickup.id);
       if (stillThere) {
@@ -964,21 +1031,19 @@ export default function App() {
       }
     }
 
-    if (tripDistancePx > 0) {
+    if (tripDistancePx > 0 || treasureXp > 0) {
       setTotalDistancePx((prev) => {
-        const newTotal = prev + tripDistancePx;
+        const newTotal = prev + tripDistancePx + treasureXp;
         AsyncStorage.setItem(TOTAL_DISTANCE_KEY, newTotal.toString()).catch(() => {});
         const profileUpdate = updateMyProfile({ totalDistancePx: newTotal });
         if (profileUpdate && typeof profileUpdate.catch === 'function') {
           profileUpdate.catch(() => {});
         }
-        if (tripDistancePx > 0 || tripDurationMs > 0) {
-          showTripSummary(tripDistancePx, tripDurationMs, pickedUpItems, prev);
-        }
+        showTripSummary(tripDistancePx, tripDurationMs, pickedUpItems, prev, foundTreasures, treasureXp);
         return newTotal;
       });
     } else if (tripDurationMs > 0) {
-      showTripSummary(0, tripDurationMs, pickedUpItems, totalDistancePx);
+      showTripSummary(0, tripDurationMs, pickedUpItems, totalDistancePx, foundTreasures, treasureXp);
     }
   };
 
@@ -1256,6 +1321,20 @@ export default function App() {
                           </View>
                         );
                       })}
+                      {treasures.map((t) => {
+                        if (collectedTreasures.has(t.id)) return null;
+                        // Révélé uniquement si la tuile a été explorée (synergie brouillard)
+                        if (!explored.has(`${t.tx},${t.ty}`)) return null;
+                        return (
+                          <View
+                            key={t.id}
+                            pointerEvents="none"
+                            style={{ position: 'absolute', left: t.x - 19, top: t.y - 24 }}
+                          >
+                            <TreasureChest size={38} color={t.color} glow={t.glow} />
+                          </View>
+                        );
+                      })}
                       {target && (
                         <View style={[styles.targetMarker, { left: target.x - 14, top: target.y - 14 }]}>
                           <View style={styles.targetInner} />
@@ -1340,10 +1419,25 @@ export default function App() {
               </Text>
               {tripSummary && (
                 <XPBar
-                  totalDistancePx={tripSummary.startDistancePx + tripSummary.distancePx}
+                  totalDistancePx={tripSummary.startDistancePx + tripSummary.distancePx + (tripSummary.bonusXp || 0)}
                   startDistancePx={tripSummary.startDistancePx}
                   animated
                 />
+              )}
+              {tripSummary?.foundTreasures?.length > 0 && (
+                <View style={styles.tripSummaryPickups}>
+                  <Text style={styles.tripSummaryPickupsTitle}>
+                    🏴‍☠️ Trésors découverts (+{tripSummary.bonusXp} XP) :
+                  </Text>
+                  {tripSummary.foundTreasures.map((t) => (
+                    <View key={t.id} style={{ flexDirection: 'row', alignItems: 'center', marginVertical: 1 }}>
+                      <View style={{ width: 9, height: 9, borderRadius: 2, marginRight: 7, backgroundColor: t.color }} />
+                      <Text style={styles.tripSummaryPickupLine}>
+                        {(TREASURE_TIERS[t.tier]?.label || 'Coffre')} · {t.name}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
               )}
               {tripSummary?.pickedUpItems?.length > 0 && (
                 <View style={styles.tripSummaryPickups}>
@@ -1422,7 +1516,9 @@ export default function App() {
                 ? `Message de ${pendingTarget.pickupLetter.authorName || 'Anonyme'}`
                 : pendingTarget.nearPlayer
                   ? (pendingTarget.nearPlayer.name || 'Inconnu')
-                  : `${Math.round(pendingTarget.x / TILE_PX)}, ${Math.round(pendingTarget.y / TILE_PX)}`
+                  : pendingTarget.nearTreasure
+                    ? `🏴‍☠️ ${TREASURE_TIERS[pendingTarget.nearTreasure.tier]?.label || 'Coffre'}`
+                    : `${Math.round(pendingTarget.x / TILE_PX)}, ${Math.round(pendingTarget.y / TILE_PX)}`
             }
             onCancel={cancelMove} onConfirm={confirmMove}
           />
